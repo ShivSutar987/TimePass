@@ -49,7 +49,7 @@ function ensureAdminCredentials(db) {
   let storedSalt = db.getSetting('admin_pin_salt');
 
   if (!storedHash || !storedSalt) {
-    const defaultPin = process.env.ADMIN_PIN || '1234';
+    const defaultPin = process.env.ADMIN_PASSWORD || process.env.ADMIN_PIN || 'ShivSutar@22.132';
     const { hash, salt } = hashPin(defaultPin);
     db.setSetting('admin_pin_hash', hash);
     db.setSetting('admin_pin_salt', salt);

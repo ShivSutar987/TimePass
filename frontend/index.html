@@ -439,8 +439,8 @@
               Update the Admin PIN used to manage roommates and turns.
             </p>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-              <input type="password" class="form-control" id="changePinCurrent" placeholder="Current PIN (default: 1234)">
-              <input type="password" class="form-control" id="changePinNew" placeholder="New PIN (min 4 chars)">
+              <input type="password" class="form-control" id="changePinCurrent" placeholder="Current Password">
+              <input type="password" class="form-control" id="changePinNew" placeholder="New Password (min 4 chars)">
             </div>
             <button type="button" class="btn btn-secondary btn-sm" id="btnSaveNewPin" style="margin-top: 8px; width: 100%;">
               🔑 Update Admin PIN
@@ -488,13 +488,13 @@
 
         <form id="formAdminLogin">
           <div class="form-group">
-            <label class="form-label">Admin PIN / Password</label>
+            <label class="form-label">Admin Password</label>
             <div style="position: relative; display: flex; align-items: center;">
-              <input type="password" class="form-control" id="adminPinInput" placeholder="Enter Admin PIN" required autocomplete="current-password" style="padding-right: 44px;">
-              <button type="button" id="btnTogglePinVisibility" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 1.1rem; padding: 4px;" title="Show/Hide PIN">👁️</button>
+              <input type="password" class="form-control" id="adminPinInput" placeholder="Enter Admin Password" required autocomplete="current-password" style="padding-right: 44px;">
+              <button type="button" id="btnTogglePinVisibility" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 1.1rem; padding: 4px;" title="Show/Hide Password">👁️</button>
             </div>
             <small style="color: #64748b; font-size: 0.78rem; display: block; margin-top: 6px;">
-              💡 Default Admin PIN is <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: #38bdf8;">1234</code>
+              💡 Enter the Room Admin password to unlock controls.
             </small>
           </div>
 
