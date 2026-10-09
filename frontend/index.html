@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>💧 PaniPari - Room Water Turn Manager</title>
+  <meta name="description" content="Never argue about who has to fetch water again. Clean, fair, real-time room water rotation tracker.">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%20%22100%22%20%22100%22><text y=%22.9em%22 font-size=%2290%22>💧</text></svg>">
+</head>
+<body>
+
+  <!-- Top App Navigation Bar -->
+  <header class="app-header">
+    <div class="container header-content">
+      <div class="brand-wrapper">
+        <div class="logo-badge">💧</div>
+        <div class="brand-titles">
+          <div class="room-title-wrapper">
+            <h1 class="room-title" id="roomNameHeader">Room Water Turn</h1>
+            <button class="btn btn-ghost btn-sm btn-icon-only" id="btnEditRoomName" title="Rename Room">✏️</button>
+          </div>
+          <span class="subtitle">Room Water Duty Rotation</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn btn-secondary btn-sm" id="btnOpenMobileQR" title="Scan to open on phone">
+          📱 <span class="btn-label">Mobile QR</span>
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btnOpenMembersModal" title="Manage Roommates">
+          👥 <span class="btn-label">Roommates</span>
+        </button>
+        <button class="btn btn-ghost btn-sm btn-icon-only" id="btnOpenSettingsModal" title="Settings & Rotation Rules">
+          ⚙️
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="container">
+
+    <!-- Urgent Water Empty Alert Banner (Hidden by default, shown when can is empty) -->
+    <section class="alert-banner" id="waterAlertBanner" style="display: none;">
+      <div class="alert-content">
+        <div class="alert-icon">🚨</div>
+        <div class="alert-text">
+          <h4>Water Can is Empty!</h4>
+          <p id="alertBannerText"><strong id="alertPersonName">Someone</strong>, please bring water into the room!</p>
+        </div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="btnAlertQuickDone">💧 I Got It!</button>
+    </section>
+
+    <!-- Water Can Status Quick Strip -->
+    <section class="can-status-strip">
+      <div class="can-status-left">
+        <span class="can-status-label">Water Camper Status:</span>
+        <span class="status-badge full" id="canStatusBadge">
+          <span id="canStatusDot">🟢</span> <span id="canStatusText">Full</span>
+        </span>
+      </div>
+      <div class="can-status-toggle-group">
+        <button class="can-toggle-btn btn-full active" data-status="full">🟢 Full</button>
+        <button class="can-toggle-btn btn-half" data-status="half">🟡 Half / Low</button>
+        <button class="can-toggle-btn btn-empty" data-status="empty">🔴 Empty!</button>
+      </div>
+    </section>
+
+    <!-- HERO SECTION: Whose Turn Is It Right Now? -->
+    <section class="hero-turn-card" id="heroTurnCard">
+      <div class="turn-pill-badge">
+        <span class="pulse-dot"></span>
+        CURRENT TURN TO GET WATER
+      </div>
+
+      <div class="turn-card-body">
+        <div class="current-person-meta">
+          <div class="current-avatar" id="heroAvatar" style="background-color: #3b82f6;">
+            😎
+          </div>
+          <div class="current-info">
+            <h2>
+              <span id="heroName">Rahul</span>
+              <span class="current-nickname" id="heroNickname">(Bhai)</span>
+            </h2>
+            <div class="current-stats-chips">
+              <span class="stat-chip">Total Cans: <strong id="heroTotalCans">0</strong></span>
+              <span class="stat-chip">Last Brought: <span id="heroLastTime">Never</span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-actions-container">
+          <button class="btn-hero-action" id="btnHeroCompleteTurn">
+            💧 I Brought Water!
+          </button>
+          <div class="hero-sub-actions">
+            <button class="btn btn-secondary btn-sm" id="btnHeroSkipTurn" title="Skip to next person if unavailable">
+              ⏭️ Skip Turn
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btnHeroSwapTurn" title="Swap turn with another roommate">
+              🔄 Swap Turn
+            </button>
+            <button class="btn btn-ghost btn-sm" id="btnHeroLogCustom" title="Log for someone else or custom amount">
+              ➕ Log Other
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Turn Rotation Queue (Visual Lineup) -->
+    <section class="queue-container">
+      <div class="section-header">
+        <h3 class="section-title">
+          🔄 Turn Sequence (Next in Line)
+        </h3>
+        <span class="subtitle" id="rotationModeText">Round Robin Rotation</span>
+      </div>
+      <div class="queue-flow" id="queueList">
+        <!-- Rendered by JS -->
+      </div>
+    </section>
+
+    <!-- Dashboard 2-Column Grid -->
+    <div class="dashboard-grid">
+
+      <!-- Column 1: Fairness & Room Leaderboard -->
+      <section class="dash-card">
+        <div class="section-header">
+          <h3 class="section-title">
+            📊 Roommates & Fairness
+          </h3>
+          <button class="btn btn-ghost btn-sm" id="btnAddRoommateQuick">+ Add Person</button>
+        </div>
+
+        <!-- Mini Totals -->
+        <div class="totals-row">
+          <div class="total-mini-card">
+            <div class="total-mini-label">Total Cans</div>
+            <div class="total-mini-value" id="statTotalCans">0</div>
+          </div>
+          <div class="total-mini-card">
+            <div class="total-mini-label">Total Litres</div>
+            <div class="total-mini-value" id="statTotalLitres">0L</div>
+          </div>
+          <div class="total-mini-card">
+            <div class="total-mini-label">Avg / Person</div>
+            <div class="total-mini-value" id="statAvgCans">0</div>
+          </div>
+        </div>
+
+        <!-- Roommates List with contribution progress -->
+        <div class="stats-list" id="memberStatsList">
+          <!-- Rendered by JS -->
+        </div>
+      </section>
+
+      <!-- Column 2: Activity Logs & History -->
+      <section class="dash-card">
+        <div class="section-header">
+          <h3 class="section-title">
+            📜 Water Activity History
+          </h3>
+          <div style="display:flex; gap:6px;">
+            <select class="form-control" id="filterMemberSelect" style="padding: 4px 8px; font-size: 0.78rem; width: auto;">
+              <option value="">All Roommates</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="logs-list" id="logsListContainer">
+          <!-- Rendered by JS -->
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- Modal 1: Complete Turn / Log Water -->
+  <div class="modal-overlay" id="modalLogWater">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">💧 Log Water Fetched</h3>
+        <button class="modal-close" data-close="modalLogWater">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="formLogWater">
+          <div class="form-group">
+            <label class="form-label">Who brought the water?</label>
+            <select class="form-control" id="logMemberSelect" required></select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Quantity (Cans / Campers)</label>
+            <div class="pill-selector" id="quantityPills">
+              <div class="pill-option active" data-qty="1">1 Can (20L)</div>
+              <div class="pill-option" data-qty="2">2 Cans</div>
+              <div class="pill-option" data-qty="3">3 Cans</div>
+              <div class="pill-option" data-qty="custom">Custom</div>
+            </div>
+            <input type="number" step="0.5" min="0.5" max="50" class="form-control" id="customQuantityInput" style="display: none; margin-top: 8px;" placeholder="Number of cans (e.g. 1.5)">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Water Source</label>
+            <select class="form-control" id="logSourceSelect">
+              <option value="Water Cooler">Hostel / Floor Water Cooler</option>
+              <option value="RO Filter Dispenser">RO Filter Dispenser</option>
+              <option value="Market 20L Camper">Market 20L Jar / Camper</option>
+              <option value="Tap Water / Tank">Tap Water / Tank</option>
+              <option value="Other">Other Source</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Cost Paid (Optional ₹, for purchased jars)</label>
+            <input type="number" step="1" min="0" class="form-control" id="logCostInput" placeholder="0 (leave empty if free)">
+          </div>
+
+          <div class="form-group" id="paidByGroup" style="display: none;">
+            <label class="form-label">Who paid for it?</label>
+            <select class="form-control" id="logPaidBySelect"></select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Notes (Optional)</label>
+            <input type="text" class="form-control" id="logNotesInput" placeholder="e.g. Chilled water, 2nd floor cooler">
+          </div>
+
+          <div class="modal-footer" style="padding: 0; margin-top: 20px;">
+            <button type="button" class="btn btn-secondary" data-close="modalLogWater">Cancel</button>
+            <button type="submit" class="btn btn-primary">✅ Save & Advance Turn</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 2: Skip Turn -->
+  <div class="modal-overlay" id="modalSkipTurn">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">⏭️ Skip Current Turn</h3>
+        <button class="modal-close" data-close="modalSkipTurn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: #cbd5e1; margin-bottom: 14px; font-size: 0.9rem;">
+          Skip <strong id="skipCurrentName" style="color: #38bdf8;">Rahul's</strong> turn right now? The duty will immediately pass to the next roommate in line.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Reason for skipping (Optional)</label>
+          <input type="text" class="form-control" id="skipReasonInput" placeholder="e.g. In class, outside the hostel, sick">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalSkipTurn">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btnConfirmSkip">Confirm Skip</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 3: Swap Turn -->
+  <div class="modal-overlay" id="modalSwapTurn">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">🔄 Swap Turn</h3>
+        <button class="modal-close" data-close="modalSwapTurn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: #cbd5e1; margin-bottom: 14px; font-size: 0.9rem;">
+          Swap current turn with another roommate. They will take this turn instead!
+        </p>
+        <div class="form-group">
+          <label class="form-label">Select Roommate to Take Turn</label>
+          <select class="form-control" id="swapTargetSelect"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Reason (Optional)</label>
+          <input type="text" class="form-control" id="swapReasonInput" placeholder="e.g. Aman agreed to bring water today">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalSwapTurn">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btnConfirmSwap">Confirm Swap</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 4: Manage Roommates -->
+  <div class="modal-overlay" id="modalMembers">
+    <div class="modal-box" style="max-width: 520px;">
+      <div class="modal-header">
+        <h3 class="modal-title">👥 Manage Roommates</h3>
+        <button class="modal-close" data-close="modalMembers">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Add New Roommate Form -->
+        <form id="formAddMember" style="background: rgba(15, 23, 42, 0.6); padding: 14px; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 18px;">
+          <h4 style="font-size: 0.92rem; margin-bottom: 10px; color: #38bdf8;">+ Add New Roommate</h4>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <input type="text" class="form-control" id="newMemberName" placeholder="Name (e.g. Vikas)" required>
+            <input type="text" class="form-control" id="newMemberNickname" placeholder="Nickname (optional)">
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 8px; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+              <label style="font-size: 0.78rem; color: #94a3b8;">Color:</label>
+              <input type="color" id="newMemberColor" value="#3b82f6" style="border: none; width: 34px; height: 34px; border-radius: 6px; background: transparent; cursor: pointer;">
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+              <label style="font-size: 0.78rem; color: #94a3b8;">Emoji:</label>
+              <select class="form-control" id="newMemberEmoji" style="padding: 4px 8px;">
+                <option value="💧">💧 Water</option>
+                <option value="😎">😎 Cool</option>
+                <option value="💪">💪 Strong</option>
+                <option value="⚡">⚡ Fast</option>
+                <option value="👑">👑 Boss</option>
+                <option value="🦁">🦁 Lion</option>
+                <option value="🚀">🚀 Rocket</option>
+                <option value="🧙‍♂️">🧙‍♂️ Wizard</option>
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" style="white-space: nowrap;">Add Person</button>
+          </div>
+        </form>
+
+        <h4 style="font-size: 0.88rem; color: #cbd5e1; margin-bottom: 8px;">Current Roommates</h4>
+        <div class="member-list-manage" id="manageMemberList">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-close="modalMembers">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 5: Mobile QR Code / Shared Access -->
+  <div class="modal-overlay" id="modalMobileQR">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">📱 Open on Mobile Phone</h3>
+        <button class="modal-close" data-close="modalMobileQR">&times;</button>
+      </div>
+      <div class="modal-body qr-modal-content">
+        <p style="font-size: 0.88rem; color: #cbd5e1; text-align: center;">
+          Scan this QR code with any roommate's phone camera on the same Wi-Fi network:
+        </p>
+
+        <div class="qr-box" id="qrcodeCanvas"></div>
+
+        <div class="qr-ip-display" id="mobileIpText">Loading IP address...</div>
+
+        <div style="display: flex; gap: 8px; width: 100%;">
+          <button class="btn btn-primary" id="btnCopyMobileLink" style="flex: 1;">📋 Copy Link</button>
+          <a id="btnDirectOpenLink" href="#" target="_blank" class="btn btn-secondary" style="flex: 1; text-decoration: none;">🔗 Open Link</a>
+        </div>
+        <p style="font-size: 0.75rem; color: #94a3b8; margin-top: 10px;">
+          *Make sure both the computer and mobile phones are connected to the same room Wi-Fi or mobile hotspot.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 6: Room Settings -->
+  <div class="modal-overlay" id="modalSettings">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">⚙️ Room Settings & Rules</h3>
+        <button class="modal-close" data-close="modalSettings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="formRoomSettings">
+          <div class="form-group">
+            <label class="form-label">Room / Group Name</label>
+            <input type="text" class="form-control" id="settingsRoomName" value="Room 304 Hydration Club">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Turn Rotation Algorithm</label>
+            <select class="form-control" id="settingsRotationMode">
+              <option value="round_robin">🔄 Round Robin (Fixed cyclic order: A → B → C → D → A)</option>
+              <option value="least_count">⚖️ Fair Auto-Balance (Person with fewest total cans goes next)</option>
+            </select>
+            <small style="color: #94a3b8; font-size: 0.75rem; display: block; margin-top: 4px;">
+              Round Robin follows the fixed room sequence. Fair Auto-Balance automatically assigns turns to whoever has brought less water to keep it 100% fair.
+            </small>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Default Can Volume (Litres)</label>
+            <input type="number" class="form-control" id="settingsDefaultLitres" value="20" min="1" max="100">
+          </div>
+
+          <div class="modal-footer" style="padding: 0; margin-top: 20px;">
+            <button type="button" class="btn btn-secondary" data-close="modalSettings">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Offline Libraries & App Script -->
+  <script src="js/confetti.min.js"></script>
+  <script src="js/qrcode.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
