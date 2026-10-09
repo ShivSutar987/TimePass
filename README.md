@@ -7,9 +7,10 @@ A lightweight, fair, secure, and modern web application built for roommates, hos
 ## 🌟 Key Features
 
 1. **👑 Admin Login & Privilege Control**:
-   - **Admin Access Only**: Adding roommates, deleting roommates, skipping turns, swapping turns, and changing room settings require the Admin PIN.
-   - **Default Admin PIN**: `1234` (changeable in the app Settings or configured via `ADMIN_PIN` in `.env`).
-   - **Brute-Force Protection**: Automatic IP-based rate limiting prevents unauthorized PIN guessing.
+   - **Admin Access Only**: Adding roommates, deleting roommates, skipping turns, swapping turns, and changing room settings require the Admin Password.
+   - **Original Admin Password**: `ShivSutar@22.132` (securely hashed with salt in SQLite settings).
+   - **🎮 Demo Admin Sandbox**: Anyone can click "Start Demo Admin Mode" to test all admin features without knowing the real password. All demo changes are temporary and automatically wiped & reset to default upon logout!
+   - **Brute-Force Protection**: Automatic IP-based rate limiting prevents unauthorized password guessing.
 
 2. **✅ Water Verification / Confirmation**:
    - When roommates click *"I Brought Water!"*, the turn advances and logs water with a **⏳ Pending Confirmation** status.
@@ -69,10 +70,10 @@ Then open your browser at:
 - **Local Development**: [http://localhost:3000](http://localhost:3000)
 - **Mobile Phones**: Open [https://timepass-0vuz.onrender.com](https://timepass-0vuz.onrender.com) or scan the QR code from the app!
 
-### 🔐 Admin PIN
-- Default PIN: `1234`
-- To log in: Click **🔐 Admin Login** in the header.
-- To change: Open **⚙️ Settings** while logged in as Admin, or set `ADMIN_PIN=your_pin` in `.env`.
+### 🔐 Admin Authentication & Demo Mode
+- **Original Admin Password**: `ShivSutar@22.132`
+- **To log in as Real Admin**: Click **🔐 Admin Login** in the header and enter `ShivSutar@22.132`.
+- **To test as Demo Admin**: Click **🔐 Admin Login** -> click **🎮 Start Demo Admin Mode**. When you click **Exit Demo**, all changes made during the demo are automatically wiped and reset to default!
 
 ---
 

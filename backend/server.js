@@ -55,7 +55,7 @@ const DEPLOYED_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || '
 
 // ================= AUTHENTICATION & SECURITY ENDPOINTS =================
 
-// Admin Login with Brute-Force Rate Limiting
+// Admin Login with Brute-Force Rate Limiting (Real Admin: "ShivSutar@22.132")
 app.post('/api/auth/login', (req, res) => {
   try {
     const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
@@ -68,7 +68,7 @@ app.post('/api/auth/login', (req, res) => {
 
     const { pin } = req.body || {};
     if (!pin) {
-      return res.status(400).json({ success: false, error: 'Admin PIN is required' });
+      return res.status(400).json({ success: false, error: 'Admin Password is required' });
     }
 
     const creds = security.ensureAdminCredentials(db);
@@ -81,17 +81,18 @@ app.post('/api/auth/login', (req, res) => {
       }
       return res.status(401).json({
         success: false,
-        error: `Invalid Admin PIN. ${attempt.attemptsRemaining} attempt(s) remaining.`
+        error: `Invalid Admin Password. ${attempt.attemptsRemaining} attempt(s) remaining.`
       });
     }
 
     security.clearFailedAttempts(clientIp);
-    const session = security.createSession(clientIp);
+    const session = security.createSession(clientIp, false);
 
     res.json({
       success: true,
       data: {
         token: session.token,
+        isDemo: false,
         expiresAt: session.expiresAt
       }
     });
@@ -100,12 +101,56 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-// Admin Logout
+// Demo Admin Login (Temporary Sandbox Mode with Auto-Cleanup on logout)
+app.post('/api/auth/demo-login', (req, res) => {
+  try {
+    const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+    
+    // Snapshot current baseline so everything can be restored on logout
+    db.saveDemoSnapshot();
+
+    // Create a demo session
+    const session = security.createSession(clientIp, true);
+
+    res.json({
+      success: true,
+      data: {
+        token: session.token,
+        isDemo: true,
+        expiresAt: session.expiresAt
+      },
+      message: 'Demo Admin mode activated. All actions are temporary and will be cleaned up on logout.'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin Logout (Cleans up sandbox if was in Demo mode)
 app.post('/api/auth/logout', (req, res) => {
   try {
     const token = security.extractToken(req);
+    const session = security.getSession(token);
+    const wasDemo = !!(session && session.isDemo);
+
+    if (wasDemo) {
+      // Automatic cleanup: restore clean default state
+      db.restoreDemoSnapshot();
+    }
+
     security.revokeSession(token);
-    res.json({ success: true, message: 'Logged out successfully' });
+    const summary = db.getRoomSummary();
+
+    res.json({
+      success: true,
+      data: {
+        wasDemo,
+        summary
+      },
+      message: wasDemo
+        ? 'Demo session ended. All temporary demo data cleaned up and room reset to default.'
+        : 'Logged out successfully'
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -114,29 +159,42 @@ app.post('/api/auth/logout', (req, res) => {
 // Check Admin Status
 app.get('/api/auth/status', (req, res) => {
   const token = security.extractToken(req);
-  const isValid = security.validateSession(token);
-  res.json({ success: true, data: { isAdmin: isValid } });
+  const session = security.getSession(token);
+  res.json({
+    success: true,
+    data: {
+      isAdmin: !!session,
+      isDemo: !!(session && session.isDemo)
+    }
+  });
 });
 
-// Change Admin PIN (Admin Only)
+// Change Admin Password (Real Admin Only - Blocked in Demo Mode)
 app.post('/api/auth/change-pin', security.requireAdmin, (req, res) => {
   try {
+    if (req.isDemo) {
+      return res.status(403).json({
+        success: false,
+        error: 'Password changes are disabled in Demo mode. Real Admin password is safe.'
+      });
+    }
+
     const { currentPin, newPin } = req.body || {};
     if (!newPin || String(newPin).trim().length < 4) {
-      return res.status(400).json({ success: false, error: 'New PIN must be at least 4 characters long' });
+      return res.status(400).json({ success: false, error: 'New password must be at least 4 characters long' });
     }
 
     const creds = security.ensureAdminCredentials(db);
     const isValid = security.verifyPin(currentPin, creds.hash, creds.salt);
     if (!isValid) {
-      return res.status(401).json({ success: false, error: 'Current Admin PIN is incorrect' });
+      return res.status(401).json({ success: false, error: 'Current Admin Password is incorrect' });
     }
 
     const { hash, salt } = security.hashPin(String(newPin).trim());
     db.setSetting('admin_pin_hash', hash);
     db.setSetting('admin_pin_salt', salt);
 
-    res.json({ success: true, message: 'Admin PIN updated successfully' });
+    res.json({ success: true, message: 'Admin Password updated successfully' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -505,7 +563,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`💧 Room Water Turn Manager Server Started!`);
   console.log(`🌐 Live URL: ${DEPLOYED_URL}`);
   console.log(`🏠 Local:    http://localhost:${PORT}`);
-  console.log(`🔐 Admin PIN: Enabled (Default PIN: 1234 or configured via ADMIN_PIN)`);
+  console.log(`🔐 Admin Protection: Enabled (Password Protected)`);
   const ips = getLocalIpAddresses();
   ips.forEach(ip => {
     console.log(`📱 Mobile:   http://${ip}:${PORT}`);

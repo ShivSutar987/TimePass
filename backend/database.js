@@ -684,6 +684,86 @@ const Database = {
       db.exec('ROLLBACK;');
       throw err;
     }
+  },
+
+  saveDemoSnapshot() {
+    this._demoBaselineSnapshot = this.exportAllData();
+    return this._demoBaselineSnapshot;
+  },
+
+  restoreDemoSnapshot() {
+    const adminHash = this.getSetting('admin_pin_hash');
+    const adminSalt = this.getSetting('admin_pin_salt');
+
+    if (this._demoBaselineSnapshot) {
+      this.importAllData(this._demoBaselineSnapshot);
+      this._demoBaselineSnapshot = null;
+    } else {
+      this.resetToDefault();
+    }
+
+    // Always guarantee real admin credentials are intact
+    if (adminHash && adminSalt) {
+      this.setSetting('admin_pin_hash', adminHash);
+      this.setSetting('admin_pin_salt', adminSalt);
+    }
+
+    return this.getRoomSummary();
+  },
+
+  resetToDefault() {
+    const adminHash = this.getSetting('admin_pin_hash');
+    const adminSalt = this.getSetting('admin_pin_salt');
+
+    db.exec('BEGIN TRANSACTION;');
+    try {
+      db.exec('DELETE FROM water_logs;');
+      db.exec('DELETE FROM turn_events;');
+      db.exec('DELETE FROM members;');
+
+      const insertMember = db.prepare(
+        'INSERT INTO members (name, nickname, color, emoji, is_active, order_index) VALUES (?, ?, ?, ?, 1, ?)'
+      );
+      const defaults = [
+        { name: 'Rahul', nickname: 'Bhai', color: '#3b82f6', emoji: '😎', order: 0 },
+        { name: 'Aman', nickname: 'Sharmaji', color: '#10b981', emoji: '💪', order: 1 },
+        { name: 'Rohan', nickname: 'Chintu', color: '#8b5cf6', emoji: '⚡', order: 2 },
+        { name: 'Vikram', nickname: 'Boss', color: '#f59e0b', emoji: '👑', order: 3 }
+      ];
+
+      defaults.forEach((m) => {
+        insertMember.run(m.name, m.nickname, m.color, m.emoji, m.order);
+      });
+
+      const firstMember = db.prepare('SELECT id FROM members ORDER BY order_index ASC LIMIT 1').get();
+      if (firstMember) {
+        this.setSetting('current_turn_member_id', String(firstMember.id));
+      }
+
+      this.setSetting('room_name', 'Room 304 Hydration Club');
+      this.setSetting('can_status', 'full');
+      this.setSetting('rotation_mode', 'round_robin');
+      this.setSetting('default_can_litres', '20');
+
+      if (adminHash && adminSalt) {
+        this.setSetting('admin_pin_hash', adminHash);
+        this.setSetting('admin_pin_salt', adminSalt);
+      }
+
+      // Sample verified log
+      if (firstMember) {
+        db.prepare(`
+          INSERT INTO water_logs (member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn, is_confirmed, confirmed_by, confirmed_at)
+          VALUES (?, 1, 20, 'Hostel Cooler', 0, ?, 'Chilled jar from 2nd floor', 1, 1, 'Admin', CURRENT_TIMESTAMP)
+        `).run(firstMember.id, firstMember.id);
+      }
+
+      db.exec('COMMIT;');
+      return this.getRoomSummary();
+    } catch (e) {
+      db.exec('ROLLBACK;');
+      throw e;
+    }
   }
 };
 

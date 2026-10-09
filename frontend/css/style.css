@@ -1502,3 +1502,52 @@ body {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* Demo Admin Banner & Badge */
+.demo-active-banner {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15) 0%, rgba(14, 165, 233, 0.1) 100%);
+  border: 1px dashed rgba(56, 189, 248, 0.6);
+  border-radius: var(--radius-md);
+  padding: 12px 18px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  animation: slide-down 0.3s ease;
+}
+
+.demo-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.demo-banner-content .demo-icon {
+  font-size: 1.5rem;
+}
+
+.demo-banner-text strong {
+  display: block;
+  font-size: 0.95rem;
+  color: #38bdf8;
+  margin-bottom: 2px;
+}
+
+.demo-banner-text p {
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.badge-demo-active {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}

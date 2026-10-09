@@ -45,6 +45,18 @@
   <!-- Main Container -->
   <main class="container">
 
+    <!-- Demo Admin Active Sandbox Banner -->
+    <section class="demo-active-banner" id="demoActiveBanner" style="display: none;">
+      <div class="demo-banner-content">
+        <span class="demo-icon">🧪</span>
+        <div class="demo-banner-text">
+          <strong>Demo Admin Mode (Sandbox)</strong>
+          <p>Feel free to test adding/deleting roommates, skipping turns, confirming water, etc. All changes are temporary and will be wiped & reset to default upon logout!</p>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-danger" id="btnExitDemoBanner">🧹 Exit Demo & Reset</button>
+    </section>
+
     <!-- Pending Water Confirmation Banner (Shows when logs are awaiting Admin check) -->
     <section class="admin-notice-banner" id="unconfirmedAlertBanner" style="display: none;">
       <div class="notice-content">
@@ -503,6 +515,25 @@
             <button type="submit" class="btn btn-primary" id="btnSubmitAdminLogin">🔓 Unlock Admin</button>
           </div>
         </form>
+
+        <!-- Try Demo Mode Divider & Button -->
+        <div style="margin: 18px 0 14px 0; display: flex; align-items: center; gap: 8px;">
+          <hr style="flex: 1; border: none; border-top: 1px solid var(--border-color);">
+          <span style="font-size: 0.72rem; color: #64748b; text-transform: uppercase; font-weight: 600;">or try demo</span>
+          <hr style="flex: 1; border: none; border-top: 1px solid var(--border-color);">
+        </div>
+
+        <div style="background: rgba(30, 41, 59, 0.6); border: 1px dashed rgba(56, 189, 248, 0.4); border-radius: var(--radius-md); padding: 12px; text-align: center;">
+          <div style="font-size: 0.86rem; font-weight: 600; color: #38bdf8; margin-bottom: 4px;">
+            🧪 Test Admin Controls (Demo Sandbox)
+          </div>
+          <p style="font-size: 0.76rem; color: #94a3b8; margin-bottom: 10px;">
+            Explore what an admin can do (add/delete roommates, skip turns, confirm water). All demo actions are temporary and automatically wiped on logout!
+          </p>
+          <button type="button" class="btn btn-secondary btn-sm" id="btnTryDemoAdmin" style="width: 100%; border-color: #38bdf8; color: #38bdf8; font-weight: 600;">
+            🎮 Start Demo Admin Mode
+          </button>
+        </div>
       </div>
     </div>
   </div>

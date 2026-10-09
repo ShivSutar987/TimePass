@@ -1,14 +1,16 @@
 /**
  * PaniPari - Security & Authentication Module
  * Pure Node.js implementation using native crypto (zero external npm dependencies)
- * Keeps repository well under 50 MB with robust security.
+ * Real Admin Password: "ShivSutar@22.132"
+ * Supports Temporary Demo Admin Mode with Sandbox Auto-Cleanup
  */
 
 const crypto = require('node:crypto');
 
-// In-memory active sessions: token -> { createdAt, expiresAt, ip }
+// In-memory active sessions: token -> { createdAt, expiresAt, ip, isDemo }
 const activeSessions = new Map();
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days for real admin
+const DEMO_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours for demo admin
 
 // Brute-force rate limiter for login: ip -> { attempts: number, lockUntil: number }
 const loginAttempts = new Map();
@@ -27,7 +29,7 @@ function hashPin(pin, salt = null) {
 }
 
 /**
- * Verify a PIN against a stored hash and salt with constant-time equality
+ * Verify a PIN/Password against a stored hash and salt with constant-time equality
  */
 function verifyPin(enteredPin, storedHash, storedSalt) {
   if (!enteredPin || !storedHash || !storedSalt) return false;
@@ -41,16 +43,16 @@ function verifyPin(enteredPin, storedHash, storedSalt) {
 }
 
 /**
- * Get or initialize Admin PIN hash in database settings.
- * Defaults to process.env.ADMIN_PIN or '1234'
+ * Get or initialize Admin Password hash in database settings.
+ * Original Admin Password: "ShivSutar@22.132"
  */
 function ensureAdminCredentials(db) {
   let storedHash = db.getSetting('admin_pin_hash');
   let storedSalt = db.getSetting('admin_pin_salt');
 
   if (!storedHash || !storedSalt) {
-    const defaultPin = process.env.ADMIN_PASSWORD || process.env.ADMIN_PIN || 'ShivSutar@22.132';
-    const { hash, salt } = hashPin(defaultPin);
+    const originalPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_PIN || 'ShivSutar@22.132';
+    const { hash, salt } = hashPin(originalPassword);
     db.setSetting('admin_pin_hash', hash);
     db.setSetting('admin_pin_salt', salt);
     return { hash, salt };
@@ -107,17 +109,35 @@ function clearFailedAttempts(ip) {
 
 /**
  * Create a new cryptographically secure admin session token
+ * Supports isDemo flag for sandbox testing
  */
-function createSession(ip = '') {
+function createSession(ip = '', isDemo = false) {
   const token = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
   const session = {
     token,
     createdAt: now,
-    expiresAt: now + SESSION_TTL_MS,
-    ip
+    expiresAt: now + (isDemo ? DEMO_TTL_MS : SESSION_TTL_MS),
+    ip,
+    isDemo: !!isDemo
   };
   activeSessions.set(token, session);
+  return session;
+}
+
+/**
+ * Retrieve session by token (handles expiration)
+ */
+function getSession(token) {
+  if (!token) return null;
+  const session = activeSessions.get(token);
+  if (!session) return null;
+
+  if (Date.now() > session.expiresAt) {
+    activeSessions.delete(token);
+    return null;
+  }
+
   return session;
 }
 
@@ -125,16 +145,7 @@ function createSession(ip = '') {
  * Validate an admin session token
  */
 function validateSession(token) {
-  if (!token) return false;
-  const session = activeSessions.get(token);
-  if (!session) return false;
-
-  if (Date.now() > session.expiresAt) {
-    activeSessions.delete(token);
-    return false;
-  }
-
-  return true;
+  return getSession(token) !== null;
 }
 
 /**
@@ -169,17 +180,20 @@ function extractToken(req) {
 }
 
 /**
- * Express middleware: Require Admin Authentication
+ * Express middleware: Require Admin Authentication (Real or Demo)
  */
 function requireAdmin(req, res, next) {
   const token = extractToken(req);
-  if (!token || !validateSession(token)) {
+  const session = getSession(token);
+  if (!token || !session) {
     return res.status(401).json({
       success: false,
-      error: 'Admin authentication required. Please log in with the Admin PIN.'
+      error: 'Admin authentication required. Please enter Admin Password.'
     });
   }
   req.isAdmin = true;
+  req.isDemo = !!session.isDemo;
+  req.session = session;
   next();
 }
 
@@ -188,7 +202,10 @@ function requireAdmin(req, res, next) {
  */
 function optionalAdmin(req, res, next) {
   const token = extractToken(req);
-  req.isAdmin = !!(token && validateSession(token));
+  const session = getSession(token);
+  req.isAdmin = !!session;
+  req.isDemo = !!(session && session.isDemo);
+  req.session = session;
   next();
 }
 
@@ -200,6 +217,7 @@ module.exports = {
   recordFailedAttempt,
   clearFailedAttempts,
   createSession,
+  getSession,
   validateSession,
   revokeSession,
   securityHeadersMiddleware,

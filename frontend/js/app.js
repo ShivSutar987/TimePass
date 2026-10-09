@@ -13,6 +13,7 @@ let appState = {
 // Admin Authentication State
 let adminToken = localStorage.getItem('panipari_admin_token') || null;
 let isAdmin = false;
+let isDemo = false;
 
 // Helper: Get Authorization Headers for Fetch
 function getAuthHeaders(extraHeaders = {}) {
@@ -27,6 +28,7 @@ function getAuthHeaders(extraHeaders = {}) {
 async function verifyAdminAuth() {
   if (!adminToken) {
     isAdmin = false;
+    isDemo = false;
     updateAdminUI();
     return;
   }
@@ -37,14 +39,17 @@ async function verifyAdminAuth() {
     const json = await res.json();
     if (json.success && json.data.isAdmin) {
       isAdmin = true;
+      isDemo = !!json.data.isDemo;
     } else {
       isAdmin = false;
+      isDemo = false;
       adminToken = null;
       localStorage.removeItem('panipari_admin_token');
     }
   } catch (err) {
     console.warn('Could not verify admin token:', err);
     isAdmin = false;
+    isDemo = false;
   }
   updateAdminUI();
 }
@@ -54,13 +59,32 @@ function updateAdminUI() {
   const badge = document.getElementById('badgeAdminActive');
   const btnAuth = document.getElementById('btnAdminAuth');
   const btnAuthLabel = document.getElementById('adminAuthBtnLabel');
+  const demoBanner = document.getElementById('demoActiveBanner');
 
   if (badge) {
-    badge.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (isAdmin && isDemo) {
+      badge.style.display = 'inline-flex';
+      badge.className = 'badge-demo-active';
+      badge.textContent = '🧪 Demo Admin';
+    } else if (isAdmin) {
+      badge.style.display = 'inline-flex';
+      badge.className = 'badge-admin-active';
+      badge.textContent = '👑 Admin';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+
+  if (demoBanner) {
+    demoBanner.style.display = (isAdmin && isDemo) ? 'flex' : 'none';
   }
 
   if (btnAuth && btnAuthLabel) {
-    if (isAdmin) {
+    if (isAdmin && isDemo) {
+      btnAuth.className = 'btn btn-secondary btn-sm';
+      btnAuthLabel.textContent = 'Exit Demo';
+      btnAuth.title = 'Exit Demo mode and reset all test changes';
+    } else if (isAdmin) {
       btnAuth.className = 'btn btn-primary btn-sm';
       btnAuthLabel.textContent = 'Admin (Logout)';
       btnAuth.title = 'Click to log out of Admin mode';
@@ -77,10 +101,10 @@ function requireAdminAction(callback, actionDescription = 'this action') {
   if (isAdmin) {
     callback();
   } else {
-    showToast(`🔒 Admin PIN required to ${actionDescription}`, 'warning');
+    showToast(`🔒 Admin access required to ${actionDescription}`, 'warning');
     const errBox = document.getElementById('adminLoginError');
     if (errBox) {
-      errBox.textContent = `Admin access is required to ${actionDescription}. Please enter Admin PIN.`;
+      errBox.textContent = `Admin access is required to ${actionDescription}. Please enter Admin Password or try Demo mode.`;
       errBox.style.display = 'block';
     }
     openModal('modalAdminLogin');
@@ -1124,7 +1148,7 @@ async function saveRoomSettings(room_name, rotation_mode, default_can_litres) {
   }
 }
 
-// 12. Admin Login
+// 12. Admin Login (Real Admin: "ShivSutar@22.132")
 async function handleAdminLoginSubmit(e) {
   e.preventDefault();
   const pinInput = document.getElementById('adminPinInput');
@@ -1145,16 +1169,17 @@ async function handleAdminLoginSubmit(e) {
       adminToken = json.data.token;
       localStorage.setItem('panipari_admin_token', adminToken);
       isAdmin = true;
+      isDemo = false;
       updateAdminUI();
       closeModal('modalAdminLogin');
       pinInput.value = '';
       if (errorBox) errorBox.style.display = 'none';
-      showToast('👑 Admin mode unlocked!', 'success');
+      showToast('👑 Real Admin mode unlocked!', 'success');
       await loadData();
       await loadLogs();
     } else {
       if (errorBox) {
-        errorBox.textContent = json.error || 'Invalid Admin PIN';
+        errorBox.textContent = json.error || 'Invalid Admin Password';
         errorBox.style.display = 'block';
       }
     }
@@ -1166,22 +1191,59 @@ async function handleAdminLoginSubmit(e) {
   }
 }
 
-// 13. Admin Logout
+// 12b. Start Demo Admin Mode (Sandbox with Auto-Cleanup)
+async function startDemoAdmin() {
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/demo-login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const json = await res.json();
+
+    if (json.success && json.data?.token) {
+      adminToken = json.data.token;
+      localStorage.setItem('panipari_admin_token', adminToken);
+      isAdmin = true;
+      isDemo = true;
+      updateAdminUI();
+      closeModal('modalAdminLogin');
+      showToast('🧪 Demo Admin mode started! Test any feature; all changes will be cleaned up on logout.', 'info');
+      await loadData();
+      await loadLogs();
+    } else {
+      showToast(json.error || 'Failed to start demo mode', 'error');
+    }
+  } catch (err) {
+    showToast('Network error starting demo mode', 'error');
+  }
+}
+
+// 13. Admin Logout (Handles Sandbox Cleanup for Demo Admin)
 async function handleAdminLogout() {
-  if (confirm('Log out of Admin mode?')) {
+  const confirmMsg = isDemo
+    ? 'Exit Demo Admin mode? All test additions and changes will be wiped and restored to default.'
+    : 'Log out of Admin mode?';
+
+  if (confirm(confirmMsg)) {
     try {
-      await fetch(`${API_BASE}/api/auth/logout`, {
+      const res = await fetch(`${API_BASE}/api/auth/logout`, {
         method: 'POST',
         headers: getAuthHeaders()
       });
+      const json = await res.json();
+      if (json.data?.wasDemo) {
+        showToast('🧹 Demo ended! All test changes wiped and room reset to default.', 'success');
+      } else {
+        showToast('Logged out of Admin mode', 'info');
+      }
     } catch (e) {
       // Ignore network errors on logout
     }
     adminToken = null;
     localStorage.removeItem('panipari_admin_token');
     isAdmin = false;
+    isDemo = false;
     updateAdminUI();
-    showToast('Logged out of Admin mode', 'info');
     await loadData();
     await loadLogs();
   }
@@ -1314,7 +1376,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Admin Login Form Submit
   document.getElementById('formAdminLogin')?.addEventListener('submit', handleAdminLoginSubmit);
 
-  // Toggle PIN visibility button
+  // Demo Admin Mode Buttons
+  document.getElementById('btnTryDemoAdmin')?.addEventListener('click', startDemoAdmin);
+  document.getElementById('btnExitDemoBanner')?.addEventListener('click', handleAdminLogout);
+
+  // Toggle Password visibility button
   document.getElementById('btnTogglePinVisibility')?.addEventListener('click', () => {
     const pinInput = document.getElementById('adminPinInput');
     if (pinInput) {
@@ -1322,7 +1388,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Change Admin PIN in Settings
+  // Change Admin Password in Settings
   document.getElementById('btnSaveNewPin')?.addEventListener('click', handleChangeAdminPin);
 
   // 2. Hero Action Buttons
