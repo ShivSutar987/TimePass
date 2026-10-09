@@ -10,6 +10,83 @@ let appState = {
   selectedQuantity: 1
 };
 
+// Admin Authentication State
+let adminToken = localStorage.getItem('panipari_admin_token') || null;
+let isAdmin = false;
+
+// Helper: Get Authorization Headers for Fetch
+function getAuthHeaders(extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+  if (adminToken) {
+    headers['Authorization'] = `Bearer ${adminToken}`;
+  }
+  return headers;
+}
+
+// Verify Admin Status with Backend
+async function verifyAdminAuth() {
+  if (!adminToken) {
+    isAdmin = false;
+    updateAdminUI();
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/status`, {
+      headers: getAuthHeaders()
+    });
+    const json = await res.json();
+    if (json.success && json.data.isAdmin) {
+      isAdmin = true;
+    } else {
+      isAdmin = false;
+      adminToken = null;
+      localStorage.removeItem('panipari_admin_token');
+    }
+  } catch (err) {
+    console.warn('Could not verify admin token:', err);
+    isAdmin = false;
+  }
+  updateAdminUI();
+}
+
+// Update Admin Elements in UI
+function updateAdminUI() {
+  const badge = document.getElementById('badgeAdminActive');
+  const btnAuth = document.getElementById('btnAdminAuth');
+  const btnAuthLabel = document.getElementById('adminAuthBtnLabel');
+
+  if (badge) {
+    badge.style.display = isAdmin ? 'inline-flex' : 'none';
+  }
+
+  if (btnAuth && btnAuthLabel) {
+    if (isAdmin) {
+      btnAuth.className = 'btn btn-primary btn-sm';
+      btnAuthLabel.textContent = 'Admin (Logout)';
+      btnAuth.title = 'Click to log out of Admin mode';
+    } else {
+      btnAuth.className = 'btn btn-secondary btn-sm';
+      btnAuthLabel.textContent = 'Admin Login';
+      btnAuth.title = 'Click to log in as Room Admin';
+    }
+  }
+}
+
+// Guard: Protect Actions that Require Admin
+function requireAdminAction(callback, actionDescription = 'this action') {
+  if (isAdmin) {
+    callback();
+  } else {
+    showToast(`🔒 Admin PIN required to ${actionDescription}`, 'warning');
+    const errBox = document.getElementById('adminLoginError');
+    if (errBox) {
+      errBox.textContent = `Admin access is required to ${actionDescription}. Please enter Admin PIN.`;
+      errBox.style.display = 'block';
+    }
+    openModal('modalAdminLogin');
+  }
+}
+
 // Web Audio synthesizer for celebration chime
 function playWaterChime() {
   try {
@@ -17,7 +94,7 @@ function playWaterChime() {
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     
-    // Play two notes (harmonic water ripple)
+    // Play four notes (harmonic water ripple)
     const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
     notes.forEach((freq, idx) => {
       const osc = ctx.createOscillator();
@@ -36,7 +113,6 @@ function playWaterChime() {
       osc.stop(ctx.currentTime + idx * 0.08 + 0.35);
     });
   } catch (e) {
-    // Audio might be blocked before first user interaction
     console.log('Audio chime not available:', e);
   }
 }
@@ -138,7 +214,7 @@ function renderApp() {
   const { summary } = appState;
   if (!summary) return;
 
-  const { settings, currentTurn, queue, stats, totals } = summary;
+  const { settings, currentTurn, queue, stats, totals, unconfirmedCount } = summary;
 
   // 1. Header & Room Name
   const roomTitleElem = document.getElementById('roomNameHeader');
@@ -146,23 +222,61 @@ function renderApp() {
     roomTitleElem.textContent = settings.room_name || 'Room Water Turn';
   }
 
-  // 2. Can Status Strip & Alert Banner
+  // 2. Pending Water Logs Banner
+  renderPendingConfirmationBanner(unconfirmedCount || 0);
+
+  // 3. Can Status Strip & Alert Banner
   renderCanStatus(settings.can_status, currentTurn);
 
-  // 3. Hero Card (Current Turn)
+  // 4. Hero Card (Current Turn)
   renderHero(currentTurn);
 
-  // 4. Turn Queue (Next in line)
+  // 5. Turn Queue (Next in line - with click for detailed profile)
   renderQueue(queue, settings.rotation_mode);
 
-  // 5. Leaderboard / Fairness Stats
+  // 6. Leaderboard / Fairness Stats
   renderFairnessLeaderboard(stats, totals);
 
-  // 6. Update Modals Dropdowns
+  // 7. Update Modal Dropdowns
   updateModalDropdowns(stats);
+
+  // 8. Update Admin indicator
+  updateAdminUI();
 }
 
-function renderCanStatus(status, currentTurn) {
+function renderPendingConfirmationBanner(unconfirmedCount) {
+  const banner = document.getElementById('unconfirmedAlertBanner');
+  const countTitle = document.getElementById('unconfirmedBannerTitle');
+  const countText = document.getElementById('unconfirmedBannerText');
+  const btnBannerConfirmAll = document.getElementById('btnBannerConfirmAll');
+
+  if (!banner) return;
+
+  if (unconfirmedCount > 0) {
+    banner.style.display = 'flex';
+    if (countTitle) {
+      countTitle.textContent = `${unconfirmedCount} Water Log(s) Pending Admin Confirmation`;
+    }
+    if (countText) {
+      countText.textContent = isAdmin 
+        ? `Roommate reported water fetched. As Admin, please confirm if it was really brought into the room!`
+        : `Water was reported as brought. Waiting for Admin to check and confirm duty completion.`;
+    }
+    if (btnBannerConfirmAll) {
+      if (isAdmin) {
+        btnBannerConfirmAll.textContent = '✅ Confirm All (Admin)';
+        btnBannerConfirmAll.onclick = handleConfirmAllLogs;
+      } else {
+        btnBannerConfirmAll.textContent = '🔐 Admin Login to Confirm';
+        btnBannerConfirmAll.onclick = () => openModal('modalAdminLogin');
+      }
+    }
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function renderCanStatus(status = 'full', currentTurn) {
   const badge = document.getElementById('canStatusBadge');
   const dot = document.getElementById('canStatusDot');
   const text = document.getElementById('canStatusText');
@@ -252,10 +366,7 @@ function renderQueue(queue, rotationMode) {
     const isCurrent = index === 0;
     const card = document.createElement('div');
     card.className = `queue-card ${isCurrent ? 'is-current' : ''}`;
-
-    let orderLabel = `#${index + 1}`;
-    if (isCurrent) orderLabel = 'NOW';
-    else if (index === 1) orderLabel = 'NEXT';
+    card.title = `Click to view full details for ${member.name}`;
 
     card.innerHTML = `
       <div class="queue-order-badge">${index + 1}</div>
@@ -267,6 +378,12 @@ function renderQueue(queue, rotationMode) {
         <div class="queue-tag">${isCurrent ? '💧 Current Turn' : (index === 1 ? '👉 Up Next' : 'In Line')}</div>
       </div>
     `;
+
+    // Click on ANY name in turn sequence to view overall details
+    card.addEventListener('click', () => {
+      openMemberDetailModal(member.id);
+    });
+
     container.appendChild(card);
   });
 }
@@ -295,8 +412,7 @@ function renderFairnessLeaderboard(stats, totals) {
   // Sort by total cans descending
   const sortedStats = [...stats].sort((a, b) => b.total_cans - a.total_cans);
 
-  sortedStats.forEach((s, idx) => {
-    const isChamp = idx === 0 && s.total_cans > 0;
+  sortedStats.forEach((s) => {
     const percentage = Math.min(100, Math.round((s.total_cans / maxCans) * 100));
 
     let deltaHtml = '';
@@ -310,6 +426,9 @@ function renderFairnessLeaderboard(stats, totals) {
 
     const item = document.createElement('div');
     item.className = 'stat-item';
+    item.style.cursor = 'pointer';
+    item.title = `Click to view profile & stats for ${s.name}`;
+
     item.innerHTML = `
       <div class="stat-item-top">
         <div class="stat-person">
@@ -318,25 +437,27 @@ function renderFairnessLeaderboard(stats, totals) {
           </div>
           <div>
             <div class="stat-name">
-              ${escapeHtml(s.name)} ${s.nickname ? `<span style="font-size:0.8rem; color:#94a3b8;">(${escapeHtml(s.nickname)})</span>` : ''}
-              ${isChamp ? ' 🏆' : ''}
-              ${!s.is_active ? ' <span style="font-size:0.7rem; color:#f59e0b; background: rgba(245,158,11,0.15); padding:2px 6px; border-radius:4px;">Away</span>' : ''}
-            </div>
-            <div class="stat-meta">
-              ${s.total_litres}L • ${s.turn_count} turns • Last: ${formatDateTime(s.last_brought_at)}
-              ${s.total_spent > 0 ? ` • Spent: ₹${s.total_spent}` : ''}
+              ${escapeHtml(s.name)}
+              ${s.nickname ? `<span class="stat-nickname">(${escapeHtml(s.nickname)})</span>` : ''}
+              ${!s.is_active ? '<span class="status-badge half" style="font-size:0.65rem; padding: 1px 6px;">🏖️ Away</span>' : ''}
             </div>
           </div>
         </div>
-        <div class="stat-score">
-          <div class="stat-cans-count">${s.total_cans} <span style="font-size:0.75rem; font-weight:600; color:#94a3b8;">cans</span></div>
-          <div>${deltaHtml}</div>
+        <div class="stat-values">
+          <span class="stat-cans-count">${s.total_cans} cans <span style="font-size:0.75rem; color:#94a3b8;">(${s.total_litres}L)</span></span>
+          ${deltaHtml}
         </div>
       </div>
-      <div class="stat-progress-bar">
-        <div class="stat-progress-fill" style="width: ${percentage}%; background: ${s.color || '#0284c7'};"></div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" style="width: ${percentage}%; background-color: ${s.color || '#3b82f6'};"></div>
       </div>
     `;
+
+    // Clicking leaderboard item also opens member details
+    item.addEventListener('click', () => {
+      openMemberDetailModal(s.member_id);
+    });
+
     listContainer.appendChild(item);
   });
 }
@@ -346,53 +467,245 @@ function renderLogs() {
   if (!container) return;
 
   container.innerHTML = '';
-  const logs = appState.logs;
+  const logs = appState.logs || [];
 
-  if (!logs || logs.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon">💧</div>
-        <div>No water logs yet! Tap "I Brought Water!" to start tracking.</div>
-      </div>
-    `;
+  if (logs.length === 0) {
+    container.innerHTML = `<div class="empty-state">No water activity recorded yet</div>`;
     return;
   }
 
   logs.forEach(log => {
     const item = document.createElement('div');
     item.className = 'log-item';
+
+    // Status pill
+    const isConfirmed = log.is_confirmed === 1 || log.is_confirmed === true;
+    const confirmBadgeHtml = isConfirmed
+      ? `<span class="badge-verified">✅ Verified</span>`
+      : `<span class="badge-pending">⏳ Pending Confirmation</span>`;
+
+    // Admin action buttons (Confirm or Delete)
+    let adminActionsHtml = '';
+    if (isAdmin) {
+      adminActionsHtml = `
+        <div class="log-actions">
+          ${!isConfirmed ? `<button class="btn-confirm-sm" data-confirm-log="${log.id}" title="Confirm that water was brought">✅ Confirm</button>` : ''}
+          <button class="btn-delete-sm" data-delete-log="${log.id}" title="Remove entry">🗑️</button>
+        </div>
+      `;
+    }
+
     item.innerHTML = `
       <div class="log-left">
         <div class="log-avatar" style="background-color: ${log.member_color || '#3b82f6'};">
           ${log.member_emoji || '💧'}
         </div>
         <div>
-          <div class="log-title">${escapeHtml(log.member_name)} brought ${log.quantity} can(s)</div>
+          <div class="log-title" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span>${escapeHtml(log.member_name)} brought ${log.quantity} can(s)</span>
+            ${confirmBadgeHtml}
+          </div>
           <div class="log-details">
             <span class="log-tag">${log.litres}L</span>
             <span class="log-tag">${escapeHtml(log.source || 'Cooler')}</span>
             ${log.cost > 0 ? `<span class="log-tag" style="color:#34d399;">₹${log.cost}</span>` : ''}
           </div>
           ${log.notes ? `<div class="log-notes">"${escapeHtml(log.notes)}"</div>` : ''}
+          ${log.confirmed_at && isConfirmed ? `<div style="font-size:0.7rem; color:#64748b; margin-top:2px;">Confirmed by ${escapeHtml(log.confirmed_by || 'Admin')}</div>` : ''}
         </div>
       </div>
       <div class="log-right">
         <div class="log-time">${formatDateTime(log.logged_at)}</div>
-        <button class="btn-delete-log" data-log-id="${log.id}" title="Delete/Undo entry">🗑️</button>
+        ${adminActionsHtml}
       </div>
     `;
     container.appendChild(item);
   });
 
-  // Attach delete handlers
-  container.querySelectorAll('.btn-delete-log').forEach(btn => {
+  // Attach Admin confirm handlers
+  container.querySelectorAll('[data-confirm-log]').forEach(btn => {
     btn.addEventListener('click', async (e) => {
-      const logId = btn.dataset.logId;
-      if (confirm('Delete this water entry?')) {
+      e.stopPropagation();
+      const logId = btn.dataset.confirmLog;
+      await confirmWaterLog(logId);
+    });
+  });
+
+  // Attach Admin delete handlers
+  container.querySelectorAll('[data-delete-log]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const logId = btn.dataset.deleteLog;
+      if (confirm('Delete/Reject this water entry?')) {
         await deleteLog(logId);
       }
     });
   });
+}
+
+// Open Member Detail Modal (Requested: Shows overall details when clicking any name in turn sequence)
+async function openMemberDetailModal(memberId) {
+  const modalBody = document.getElementById('memberDetailBody');
+  const modalFooter = document.getElementById('memberDetailFooter');
+  if (!modalBody) return;
+
+  modalBody.innerHTML = `<div style="padding: 24px; text-align: center; color: #94a3b8;">Loading roommate details...</div>`;
+  openModal('modalMemberDetail');
+
+  try {
+    const res = await fetch(`${API_BASE}/api/members/${memberId}/details`);
+    const json = await res.json();
+    if (!json.success || !json.data) {
+      modalBody.innerHTML = `<div class="alert-box error">Member details not found</div>`;
+      return;
+    }
+
+    const { member, stats, queueStatus, queuePosition, isCurrentTurn, recentLogs } = json.data;
+
+    let deltaBadge = '';
+    if (stats.delta_from_avg > 0) {
+      deltaBadge = `<span style="color:#34d399;">+${stats.delta_from_avg} ahead ⭐</span>`;
+    } else if (stats.delta_from_avg < 0) {
+      deltaBadge = `<span style="color:#f87171;">${stats.delta_from_avg} behind ⚠️</span>`;
+    } else {
+      deltaBadge = `<span style="color:#38bdf8;">Even ✅</span>`;
+    }
+
+    // Recent logs list
+    let logsHtml = '';
+    if (recentLogs && recentLogs.length > 0) {
+      logsHtml = recentLogs.map(l => {
+        const isConf = l.is_confirmed === 1 || l.is_confirmed === true;
+        return `
+          <div class="member-log-row">
+            <div>
+              <strong>${l.quantity} can (${l.litres}L)</strong>
+              <span style="color:#94a3b8; font-size:0.75rem;"> - ${escapeHtml(l.source || 'Cooler')}</span>
+              ${l.cost > 0 ? `<span style="color:#34d399; font-size:0.75rem;"> (₹${l.cost})</span>` : ''}
+              ${l.notes ? `<div style="color:#cbd5e1; font-size:0.75rem; font-style:italic;">"${escapeHtml(l.notes)}"</div>` : ''}
+            </div>
+            <div style="text-align: right;">
+              <span style="font-size:0.75rem; color:#94a3b8;">${formatDateTime(l.logged_at)}</span>
+              <div>${isConf ? '<span class="badge-verified" style="font-size:0.65rem;">✅ Verified</span>' : '<span class="badge-pending" style="font-size:0.65rem;">⏳ Pending</span>'}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    } else {
+      logsHtml = `<div style="padding: 12px; text-align: center; color: #64748b; font-size: 0.8rem;">No water fetched yet by ${escapeHtml(member.name)}.</div>`;
+    }
+
+    // Admin Quick Controls inside the modal
+    let adminControlsHtml = '';
+    if (isAdmin) {
+      adminControlsHtml = `
+        <div class="member-admin-controls">
+          <button class="btn btn-primary btn-sm" id="btnModalSetCurrentTurn" style="flex: 1;">
+            🎯 Assign Current Turn
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btnModalToggleVacation" style="flex: 1;">
+            ${member.is_active ? '🏖️ Put on Vacation' : '🟢 Set Active'}
+          </button>
+          <button class="btn btn-danger btn-sm" id="btnModalDeleteMember">
+            🗑️ Delete
+          </button>
+        </div>
+      `;
+    }
+
+    modalBody.innerHTML = `
+      <!-- Profile Header -->
+      <div class="member-profile-header">
+        <div class="profile-avatar-large" style="background-color: ${member.color || '#3b82f6'};">
+          ${member.emoji || '💧'}
+        </div>
+        <div class="profile-meta">
+          <h2>
+            ${escapeHtml(member.name)}
+            ${member.nickname ? `<span style="font-size: 1rem; color: #94a3b8; font-weight: 400;">(${escapeHtml(member.nickname)})</span>` : ''}
+          </h2>
+          <div class="profile-badges-row">
+            <span class="profile-badge ${isCurrentTurn ? 'current' : queuePosition === 2 ? 'next' : ''}">
+              ${escapeHtml(queueStatus)}
+            </span>
+            <span class="profile-badge ${!member.is_active ? 'vacation' : ''}">
+              ${member.is_active ? '🟢 Active Duty' : '🏖️ Away / Vacation'}
+            </span>
+            ${queuePosition ? `<span class="profile-badge">Queue Position: #${queuePosition}</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Overall Stats Grid -->
+      <div class="stats-grid-modal">
+        <div class="stat-box-modal">
+          <div class="stat-box-val" style="color: #38bdf8;">${stats.total_cans}</div>
+          <div class="stat-box-lbl">Total Cans</div>
+        </div>
+        <div class="stat-box-modal">
+          <div class="stat-box-val" style="color: #06b6d4;">${stats.total_litres}L</div>
+          <div class="stat-box-lbl">Total Litres</div>
+        </div>
+        <div class="stat-box-modal">
+          <div class="stat-box-val" style="color: #a855f7;">${stats.turn_count}</div>
+          <div class="stat-box-lbl">Turns Completed</div>
+        </div>
+        <div class="stat-box-modal">
+          <div class="stat-box-val">${deltaBadge}</div>
+          <div class="stat-box-lbl">Fairness Status</div>
+        </div>
+        <div class="stat-box-modal">
+          <div class="stat-box-val" style="color: #10b981;">₹${stats.total_spent || 0}</div>
+          <div class="stat-box-lbl">Money Paid</div>
+        </div>
+        <div class="stat-box-modal">
+          <div class="stat-box-val" style="color: #f59e0b;">${stats.contribution_percent}%</div>
+          <div class="stat-box-lbl">Room Water Share</div>
+        </div>
+      </div>
+
+      <!-- Last Fetched Meta -->
+      <div style="background: rgba(15, 23, 42, 0.4); padding: 10px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-color); margin-bottom: 14px; font-size: 0.85rem; color: #cbd5e1; display: flex; justify-content: space-between;">
+        <span>🕒 Last Brought:</span>
+        <strong style="color: #fff;">${formatDateTime(stats.last_brought_at)}</strong>
+      </div>
+
+      <!-- Recent Logs -->
+      <div class="member-detail-section-title">
+        <span>📜 Recent Water History</span>
+        <span style="font-size: 0.72rem; color: #94a3b8;">${recentLogs.length} recent record(s)</span>
+      </div>
+      <div class="member-recent-logs">
+        ${logsHtml}
+      </div>
+
+      ${adminControlsHtml}
+    `;
+
+    // Wire up Admin Quick actions inside modal if Admin
+    if (isAdmin) {
+      document.getElementById('btnModalSetCurrentTurn')?.addEventListener('click', async () => {
+        await setCurrentTurn(member.id);
+        closeModal('modalMemberDetail');
+      });
+
+      document.getElementById('btnModalToggleVacation')?.addEventListener('click', async () => {
+        await updateMember(member.id, { is_active: !member.is_active });
+        openMemberDetailModal(member.id);
+      });
+
+      document.getElementById('btnModalDeleteMember')?.addEventListener('click', async () => {
+        if (confirm(`Are you sure you want to remove ${member.name} from the room?`)) {
+          await deleteMember(member.id);
+          closeModal('modalMemberDetail');
+        }
+      });
+    }
+
+  } catch (err) {
+    console.error('Error fetching member details:', err);
+    modalBody.innerHTML = `<div class="alert-box error">Failed to load member profile</div>`;
+  }
 }
 
 function renderManageMembers() {
@@ -425,7 +738,7 @@ function renderManageMembers() {
     list.appendChild(row);
   });
 
-  // Attach toggle active/away listeners
+  // Attach toggle active/away listeners (requires Admin)
   list.querySelectorAll('.toggle-away-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.memberId;
@@ -435,7 +748,7 @@ function renderManageMembers() {
     });
   });
 
-  // Attach delete listener
+  // Attach delete listener (requires Admin)
   list.querySelectorAll('[data-delete-member]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.deleteMember;
@@ -448,68 +761,51 @@ function renderManageMembers() {
 }
 
 function updateModalDropdowns(stats) {
-  const logSelect = document.getElementById('logMemberSelect');
-  const paidBySelect = document.getElementById('logPaidBySelect');
-  const filterSelect = document.getElementById('filterMemberSelect');
-  const swapSelect = document.getElementById('swapTargetSelect');
+  const activeMembers = (stats || []).filter(s => s.is_active);
+
+  const logMemberSelect = document.getElementById('logMemberSelect');
+  const logPaidBySelect = document.getElementById('logPaidBySelect');
+  const swapTargetSelect = document.getElementById('swapTargetSelect');
+  const filterMemberSelect = document.getElementById('filterMemberSelect');
 
   const currentTurn = appState.summary?.currentTurn;
 
-  // 1. Log Member Select
-  if (logSelect) {
-    const prevVal = logSelect.value;
-    logSelect.innerHTML = '';
-    stats.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.member_id;
-      opt.textContent = `${s.emoji} ${s.name} ${s.nickname ? `(${s.nickname})` : ''}`;
-      if (currentTurn && s.member_id === currentTurn.id) {
-        opt.selected = true;
-      }
-      logSelect.appendChild(opt);
-    });
-    if (prevVal && !currentTurn) logSelect.value = prevVal;
+  if (logMemberSelect) {
+    const currentVal = logMemberSelect.value;
+    logMemberSelect.innerHTML = activeMembers.map(m => 
+      `<option value="${m.member_id}" ${currentTurn && currentTurn.id === m.member_id ? 'selected' : ''}>${m.emoji} ${escapeHtml(m.name)}</option>`
+    ).join('');
+    if (currentVal && activeMembers.some(m => String(m.member_id) === String(currentVal))) {
+      logMemberSelect.value = currentVal;
+    }
   }
 
-  // 2. Paid By Select
-  if (paidBySelect) {
-    paidBySelect.innerHTML = '';
-    stats.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.member_id;
-      opt.textContent = `${s.name}`;
-      paidBySelect.appendChild(opt);
-    });
+  if (logPaidBySelect) {
+    logPaidBySelect.innerHTML = activeMembers.map(m => 
+      `<option value="${m.member_id}">${m.emoji} ${escapeHtml(m.name)}</option>`
+    ).join('');
   }
 
-  // 3. Filter Logs Select
-  if (filterSelect) {
-    const currentFilter = filterSelect.value;
-    filterSelect.innerHTML = '<option value="">All Roommates</option>';
-    stats.forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.member_id;
-      opt.textContent = s.name;
-      if (currentFilter == s.member_id) opt.selected = true;
-      filterSelect.appendChild(opt);
-    });
+  if (swapTargetSelect && currentTurn) {
+    const otherActive = activeMembers.filter(m => m.member_id !== currentTurn.id);
+    swapTargetSelect.innerHTML = otherActive.map(m => 
+      `<option value="${m.member_id}">${m.emoji} ${escapeHtml(m.name)}</option>`
+    ).join('');
   }
 
-  // 4. Swap Target Select
-  if (swapSelect && currentTurn) {
-    swapSelect.innerHTML = '';
-    stats.filter(s => s.member_id !== currentTurn.id && s.is_active).forEach(s => {
-      const opt = document.createElement('option');
-      opt.value = s.member_id;
-      opt.textContent = `${s.emoji} ${s.name} ${s.nickname ? `(${s.nickname})` : ''} (${s.total_cans} cans)`;
-      swapSelect.appendChild(opt);
-    });
+  if (filterMemberSelect) {
+    const prev = filterMemberSelect.value;
+    const allMembers = stats || [];
+    filterMemberSelect.innerHTML = `<option value="">All Roommates</option>` + allMembers.map(m => 
+      `<option value="${m.member_id}">${m.emoji} ${escapeHtml(m.name)}</option>`
+    ).join('');
+    filterMemberSelect.value = prev || '';
   }
 }
 
-// ================= ACTION HANDLERS =================
+// ================= USER & ADMIN ACTION HANDLERS =================
 
-// Complete Turn (Quick Hero Action)
+// 1. Hero 1-Click Complete Turn (Roommates can report; if admin, confirmed immediately)
 async function handleHeroCompleteTurn() {
   const current = appState.summary?.currentTurn;
   if (!current) {
@@ -520,18 +816,21 @@ async function handleHeroCompleteTurn() {
   try {
     const res = await fetch(`${API_BASE}/api/turn/complete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         memberId: current.id,
-        quantity: 1,
-        source: 'Water Cooler'
+        quantity: 1
       })
     });
     const json = await res.json();
     if (json.success) {
       launchConfetti();
       playWaterChime();
-      showToast(`💧 Great job! ${current.name} completed their turn!`, 'success');
+      if (json.data.requiresAdminConfirmation) {
+        showToast(`💧 Water logged for ${current.name}! Turn advanced (waiting for Admin confirmation).`, 'success');
+      } else {
+        showToast(`💧 Verified! ${current.name} brought water. Turn advanced!`, 'success');
+      }
       await loadData();
       await loadLogs();
     } else {
@@ -542,7 +841,7 @@ async function handleHeroCompleteTurn() {
   }
 }
 
-// Update Can Status (Full, Half, Empty)
+// 2. Update Can Status (Full / Half / Empty) - Open to anyone
 async function updateCanStatus(status) {
   try {
     const res = await fetch(`${API_BASE}/api/turn/can-status`, {
@@ -553,10 +852,11 @@ async function updateCanStatus(status) {
     const json = await res.json();
     if (json.success) {
       if (status === 'empty') {
-        const current = appState.summary?.currentTurn;
-        showToast(`🚨 Water marked as Empty! ${current ? current.name : 'Someone'} is on turn!`, 'warning');
+        showToast('🚨 Water marked EMPTY! Room notified.', 'warning');
+      } else if (status === 'full') {
+        showToast('🟢 Can marked FULL!', 'success');
       } else {
-        showToast(`Water status set to ${status}`, 'success');
+        showToast('🟡 Can marked LOW / HALF', 'info');
       }
       await loadData();
     }
@@ -565,19 +865,19 @@ async function updateCanStatus(status) {
   }
 }
 
-// Skip Turn
+// 3. Skip Turn (Admin Only)
 async function handleSkipTurn() {
   const reason = document.getElementById('skipReasonInput').value;
   try {
     const res = await fetch(`${API_BASE}/api/turn/skip`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ reason })
     });
     const json = await res.json();
     if (json.success) {
       closeModal('modalSkipTurn');
-      showToast(`Turn skipped! Now it's ${json.data.next.name}'s turn.`, 'warning');
+      showToast(`Turn skipped! Now it's ${json.data.next.name}'s turn.`, 'info');
       await loadData();
     } else {
       showToast(json.error || 'Failed to skip', 'error');
@@ -587,16 +887,20 @@ async function handleSkipTurn() {
   }
 }
 
-// Swap Turn
+// 4. Swap Turn (Admin Only)
 async function handleSwapTurn() {
   const targetMemberId = document.getElementById('swapTargetSelect').value;
   const reason = document.getElementById('swapReasonInput').value;
-  if (!targetMemberId) return;
+
+  if (!targetMemberId) {
+    showToast('Select a roommate to swap with', 'warning');
+    return;
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/turn/swap`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ targetMemberId, reason })
     });
     const json = await res.json();
@@ -612,7 +916,67 @@ async function handleSwapTurn() {
   }
 }
 
-// Log Custom Water Entry
+// 5. Set Specific Turn (Admin Only)
+async function setCurrentTurn(memberId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/turn/set-current`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ memberId })
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast(`Turn set to ${json.data.currentTurn.name}!`, 'success');
+      await loadData();
+    } else {
+      showToast(json.error || 'Failed to set turn', 'error');
+    }
+  } catch (err) {
+    showToast('Network error', 'error');
+  }
+}
+
+// 6. Confirm Water Log (Admin Only)
+async function confirmWaterLog(logId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/logs/${logId}/confirm`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast('✅ Water log verified and confirmed!', 'success');
+      await loadData();
+      await loadLogs();
+    } else {
+      showToast(json.error || 'Failed to confirm log', 'error');
+    }
+  } catch (err) {
+    showToast('Network error', 'error');
+  }
+}
+
+// 7. Confirm All Pending Water Logs (Admin Only)
+async function handleConfirmAllLogs() {
+  try {
+    const res = await fetch(`${API_BASE}/api/logs/confirm-all`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast('✅ All pending water logs confirmed!', 'success');
+      await loadData();
+      await loadLogs();
+    } else {
+      showToast(json.error || 'Failed to confirm logs', 'error');
+    }
+  } catch (err) {
+    showToast('Network error', 'error');
+  }
+}
+
+// 8. Log Custom Water Entry
 async function handleLogWaterSubmit(e) {
   e.preventDefault();
   const memberId = document.getElementById('logMemberSelect').value;
@@ -628,7 +992,7 @@ async function handleLogWaterSubmit(e) {
   try {
     const res = await fetch(`${API_BASE}/api/logs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         memberId,
         quantity,
@@ -644,7 +1008,11 @@ async function handleLogWaterSubmit(e) {
       closeModal('modalLogWater');
       launchConfetti();
       playWaterChime();
-      showToast('💧 Water log saved successfully!', 'success');
+      if (json.requiresAdminConfirmation) {
+        showToast('💧 Water log saved! Waiting for Admin confirmation.', 'success');
+      } else {
+        showToast('💧 Water log confirmed and saved!', 'success');
+      }
       e.target.reset();
       appState.selectedQuantity = 1;
       await loadData();
@@ -657,27 +1025,32 @@ async function handleLogWaterSubmit(e) {
   }
 }
 
-// Delete Log
+// 9. Delete Log (Admin Only)
 async function deleteLog(id) {
   try {
-    const res = await fetch(`${API_BASE}/api/logs/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/api/logs/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
     const json = await res.json();
     if (json.success) {
       showToast('Log entry removed', 'info');
       await loadData();
       await loadLogs();
+    } else {
+      showToast(json.error || 'Cannot delete entry', 'error');
     }
   } catch (err) {
     showToast('Network error', 'error');
   }
 }
 
-// Roommate Management API calls
+// 10. Roommate Management API calls (Admin Only)
 async function addMember(name, nickname, color, emoji) {
   try {
     const res = await fetch(`${API_BASE}/api/members`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ name, nickname, color, emoji })
     });
     const json = await res.json();
@@ -697,13 +1070,15 @@ async function updateMember(id, fields) {
   try {
     const res = await fetch(`${API_BASE}/api/members/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(fields)
     });
     const json = await res.json();
     if (json.success) {
       showToast('Roommate updated', 'success');
       await loadData();
+    } else {
+      showToast(json.error || 'Failed to update roommate', 'error');
     }
   } catch (err) {
     showToast('Network error', 'error');
@@ -712,23 +1087,28 @@ async function updateMember(id, fields) {
 
 async function deleteMember(id) {
   try {
-    const res = await fetch(`${API_BASE}/api/members/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/api/members/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
     const json = await res.json();
     if (json.success) {
       showToast('Roommate removed', 'info');
       await loadData();
+    } else {
+      showToast(json.error || 'Failed to remove roommate', 'error');
     }
   } catch (err) {
     showToast('Network error', 'error');
   }
 }
 
-// Settings API calls
+// 11. Settings API calls (Admin Only)
 async function saveRoomSettings(room_name, rotation_mode, default_can_litres) {
   try {
     const res = await fetch(`${API_BASE}/api/settings`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ room_name, rotation_mode, default_can_litres })
     });
     const json = await res.json();
@@ -736,6 +1116,104 @@ async function saveRoomSettings(room_name, rotation_mode, default_can_litres) {
       showToast('Settings saved!', 'success');
       closeModal('modalSettings');
       await loadData();
+    } else {
+      showToast(json.error || 'Failed to save settings', 'error');
+    }
+  } catch (err) {
+    showToast('Network error', 'error');
+  }
+}
+
+// 12. Admin Login
+async function handleAdminLoginSubmit(e) {
+  e.preventDefault();
+  const pinInput = document.getElementById('adminPinInput');
+  const errorBox = document.getElementById('adminLoginError');
+  const pin = pinInput.value.trim();
+
+  if (!pin) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin })
+    });
+    const json = await res.json();
+
+    if (json.success && json.data?.token) {
+      adminToken = json.data.token;
+      localStorage.setItem('panipari_admin_token', adminToken);
+      isAdmin = true;
+      updateAdminUI();
+      closeModal('modalAdminLogin');
+      pinInput.value = '';
+      if (errorBox) errorBox.style.display = 'none';
+      showToast('👑 Admin mode unlocked!', 'success');
+      await loadData();
+      await loadLogs();
+    } else {
+      if (errorBox) {
+        errorBox.textContent = json.error || 'Invalid Admin PIN';
+        errorBox.style.display = 'block';
+      }
+    }
+  } catch (err) {
+    if (errorBox) {
+      errorBox.textContent = 'Server connection error';
+      errorBox.style.display = 'block';
+    }
+  }
+}
+
+// 13. Admin Logout
+async function handleAdminLogout() {
+  if (confirm('Log out of Admin mode?')) {
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+    } catch (e) {
+      // Ignore network errors on logout
+    }
+    adminToken = null;
+    localStorage.removeItem('panipari_admin_token');
+    isAdmin = false;
+    updateAdminUI();
+    showToast('Logged out of Admin mode', 'info');
+    await loadData();
+    await loadLogs();
+  }
+}
+
+// 14. Change Admin PIN (Admin Only)
+async function handleChangeAdminPin() {
+  const currentPin = document.getElementById('changePinCurrent').value.trim();
+  const newPin = document.getElementById('changePinNew').value.trim();
+
+  if (!currentPin || !newPin) {
+    showToast('Please enter both current and new PIN', 'warning');
+    return;
+  }
+  if (newPin.length < 4) {
+    showToast('New PIN must be at least 4 characters long', 'warning');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/change-pin`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ currentPin, newPin })
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast('🔑 Admin PIN updated successfully!', 'success');
+      document.getElementById('changePinCurrent').value = '';
+      document.getElementById('changePinNew').value = '';
+    } else {
+      showToast(json.error || 'Failed to update PIN', 'error');
     }
   } catch (err) {
     showToast('Network error', 'error');
@@ -806,6 +1284,9 @@ function escapeHtml(str) {
 // ================= INIT & EVENT LISTENERS =================
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Check Admin session status first
+  await verifyAdminAuth();
+
   // Load initial data
   await loadData();
   await loadLogs();
@@ -818,19 +1299,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadLogs(filterVal || null);
   }, 8000);
 
-  // 1. Hero Action Buttons
+  // 1. Admin Login & Logout Header Trigger
+  document.getElementById('btnAdminAuth')?.addEventListener('click', () => {
+    if (isAdmin) {
+      handleAdminLogout();
+    } else {
+      const errBox = document.getElementById('adminLoginError');
+      if (errBox) errBox.style.display = 'none';
+      openModal('modalAdminLogin');
+      setTimeout(() => document.getElementById('adminPinInput')?.focus(), 150);
+    }
+  });
+
+  // Admin Login Form Submit
+  document.getElementById('formAdminLogin')?.addEventListener('submit', handleAdminLoginSubmit);
+
+  // Toggle PIN visibility button
+  document.getElementById('btnTogglePinVisibility')?.addEventListener('click', () => {
+    const pinInput = document.getElementById('adminPinInput');
+    if (pinInput) {
+      pinInput.type = pinInput.type === 'password' ? 'text' : 'password';
+    }
+  });
+
+  // Change Admin PIN in Settings
+  document.getElementById('btnSaveNewPin')?.addEventListener('click', handleChangeAdminPin);
+
+  // 2. Hero Action Buttons
   document.getElementById('btnHeroCompleteTurn')?.addEventListener('click', handleHeroCompleteTurn);
   document.getElementById('btnAlertQuickDone')?.addEventListener('click', handleHeroCompleteTurn);
 
-  document.getElementById('btnHeroSkipTurn')?.addEventListener('click', () => openModal('modalSkipTurn'));
-  document.getElementById('btnHeroSwapTurn')?.addEventListener('click', () => openModal('modalSwapTurn'));
-  document.getElementById('btnHeroLogCustom')?.addEventListener('click', () => openModal('modalLogWater'));
-  document.getElementById('btnAddRoommateQuick')?.addEventListener('click', () => {
-    openModal('modalMembers');
-    renderManageMembers();
+  // Protected: Skip Turn (Admin Only)
+  document.getElementById('btnHeroSkipTurn')?.addEventListener('click', () => {
+    requireAdminAction(() => openModal('modalSkipTurn'), 'skip turns');
   });
 
-  // 2. Can status buttons
+  // Protected: Swap Turn (Admin Only)
+  document.getElementById('btnHeroSwapTurn')?.addEventListener('click', () => {
+    requireAdminAction(() => openModal('modalSwapTurn'), 'swap turns');
+  });
+
+  // Log other/custom (open to roommates)
+  document.getElementById('btnHeroLogCustom')?.addEventListener('click', () => openModal('modalLogWater'));
+
+  // Protected: Quick Add Roommate (Admin Only)
+  document.getElementById('btnAddRoommateQuick')?.addEventListener('click', () => {
+    requireAdminAction(() => {
+      openModal('modalMembers');
+      renderManageMembers();
+    }, 'add roommates');
+  });
+
+  // 3. Can status buttons (Open to all roommates)
   document.querySelectorAll('.can-toggle-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const status = btn.dataset.status;
@@ -838,11 +1358,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // 3. Skip & Swap confirms
+  // 4. Skip & Swap confirms
   document.getElementById('btnConfirmSkip')?.addEventListener('click', handleSkipTurn);
   document.getElementById('btnConfirmSwap')?.addEventListener('click', handleSwapTurn);
 
-  // 4. Modal Close buttons
+  // 5. Modal Close buttons
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => {
       closeModal(btn.dataset.close);
@@ -858,26 +1378,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // 5. Open Modal Buttons
+  // 6. Open Modal Buttons
   document.getElementById('btnOpenMembersModal')?.addEventListener('click', () => {
-    openModal('modalMembers');
-    renderManageMembers();
+    requireAdminAction(() => {
+      openModal('modalMembers');
+      renderManageMembers();
+    }, 'manage roommates');
   });
 
   document.getElementById('btnOpenSettingsModal')?.addEventListener('click', () => {
-    const s = appState.summary?.settings;
-    if (s) {
-      document.getElementById('settingsRoomName').value = s.room_name || '';
-      document.getElementById('settingsRotationMode').value = s.rotation_mode || 'round_robin';
-      document.getElementById('settingsDefaultLitres').value = s.default_can_litres || '20';
-    }
-    openModal('modalSettings');
+    requireAdminAction(() => {
+      const s = appState.summary?.settings;
+      if (s) {
+        document.getElementById('settingsRoomName').value = s.room_name || '';
+        document.getElementById('settingsRotationMode').value = s.rotation_mode || 'round_robin';
+        document.getElementById('settingsDefaultLitres').value = s.default_can_litres || '20';
+      }
+      openModal('modalSettings');
+    }, 'modify room settings');
   });
 
   document.getElementById('btnEditRoomName')?.addEventListener('click', () => {
-    const s = appState.summary?.settings;
-    if (s) document.getElementById('settingsRoomName').value = s.room_name || '';
-    openModal('modalSettings');
+    requireAdminAction(() => {
+      const s = appState.summary?.settings;
+      if (s) document.getElementById('settingsRoomName').value = s.room_name || '';
+      openModal('modalSettings');
+    }, 'rename the room');
   });
 
   document.getElementById('btnOpenMobileQR')?.addEventListener('click', () => {
@@ -885,7 +1411,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     renderMobileQrModal();
   });
 
-  // 6. Quantity Pills in Log Modal
+  // 7. Quantity Pills in Log Modal
   const quantityPills = document.querySelectorAll('#quantityPills .pill-option');
   const customQtyInput = document.getElementById('customQuantityInput');
   quantityPills.forEach(pill => {
@@ -903,7 +1429,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  // 7. Cost Input toggles Paid By field
+  // 8. Cost Input toggles Paid By field
   const costInput = document.getElementById('logCostInput');
   const paidByGroup = document.getElementById('paidByGroup');
   if (costInput && paidByGroup) {
@@ -913,10 +1439,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // 8. Log Form Submit
+  // 9. Log Form Submit
   document.getElementById('formLogWater')?.addEventListener('submit', handleLogWaterSubmit);
 
-  // 9. Add Member Form Submit
+  // 10. Add Member Form Submit (Admin Only)
   document.getElementById('formAddMember')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('newMemberName').value.trim();
@@ -932,7 +1458,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 10. Room Settings Form Submit
+  // 11. Room Settings Form Submit (Admin Only)
   document.getElementById('formRoomSettings')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const room_name = document.getElementById('settingsRoomName').value.trim();
@@ -944,7 +1470,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Export Backup
   document.getElementById('btnExportBackup')?.addEventListener('click', async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/backup/export`);
+      const res = await fetch(`${API_BASE}/api/backup/export`, { headers: getAuthHeaders() });
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -959,33 +1485,35 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Import Backup
+  // Import Backup (Admin Only)
   document.getElementById('btnImportBackupFile')?.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    try {
-      const text = await file.text();
-      const json = JSON.parse(text);
-      const res = await fetch(`${API_BASE}/api/backup/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(json)
-      });
-      const result = await res.json();
-      if (result.success) {
-        showToast('Backup restored successfully!', 'success');
-        closeModal('modalSettings');
-        await loadData();
-        await loadLogs();
-      } else {
-        showToast(result.error || 'Failed to restore backup', 'error');
+    requireAdminAction(async () => {
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        const res = await fetch(`${API_BASE}/api/backup/import`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(json)
+        });
+        const result = await res.json();
+        if (result.success) {
+          showToast('Backup restored successfully!', 'success');
+          closeModal('modalSettings');
+          await loadData();
+          await loadLogs();
+        } else {
+          showToast(result.error || 'Failed to restore backup', 'error');
+        }
+      } catch (err) {
+        showToast('Invalid backup file', 'error');
       }
-    } catch (err) {
-      showToast('Invalid backup file', 'error');
-    }
+    }, 'restore backup data');
   });
 
-  // 11. Activity Log Filter
+  // 12. Activity Log Filter
   document.getElementById('filterMemberSelect')?.addEventListener('change', (e) => {
     loadLogs(e.target.value || null);
   });

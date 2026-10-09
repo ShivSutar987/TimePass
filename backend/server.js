@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const db = require('./database');
+const security = require('./security');
 
 // Automatically load .env file if it exists (checks backend/.env or root .env)
 const possibleEnvPaths = [
@@ -21,12 +22,16 @@ for (const envPath of possibleEnvPaths) {
   }
 }
 
+// Ensure Admin Credentials initialized on startup
+security.ensureAdminCredentials(db);
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// Security & Utility Middlewares
+app.use(security.securityHeadersMiddleware);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 // Serve static frontend files
 const frontendPath = path.join(__dirname, '..', 'frontend');
@@ -38,7 +43,6 @@ function getLocalIpAddresses() {
   const addresses = [];
   for (const name of Object.keys(interfaces)) {
     for (const net of interfaces[name]) {
-      // Node 18+ uses family as 'IPv4' or 4
       if ((net.family === 'IPv4' || net.family === 4) && !net.internal) {
         addresses.push(net.address);
       }
@@ -49,9 +53,98 @@ function getLocalIpAddresses() {
 
 const DEPLOYED_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://timepass-0vuz.onrender.com';
 
-// ================= API ENDPOINTS =================
+// ================= AUTHENTICATION & SECURITY ENDPOINTS =================
 
-// Status & Dashboard summary
+// Admin Login with Brute-Force Rate Limiting
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
+    
+    // Check rate limit
+    const rateCheck = security.checkRateLimit(clientIp);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ success: false, error: rateCheck.error });
+    }
+
+    const { pin } = req.body || {};
+    if (!pin) {
+      return res.status(400).json({ success: false, error: 'Admin PIN is required' });
+    }
+
+    const creds = security.ensureAdminCredentials(db);
+    const isValid = security.verifyPin(pin, creds.hash, creds.salt);
+
+    if (!isValid) {
+      const attempt = security.recordFailedAttempt(clientIp);
+      if (attempt.isLocked) {
+        return res.status(429).json({ success: false, error: 'Too many failed attempts. Locked for 5 minutes.' });
+      }
+      return res.status(401).json({
+        success: false,
+        error: `Invalid Admin PIN. ${attempt.attemptsRemaining} attempt(s) remaining.`
+      });
+    }
+
+    security.clearFailedAttempts(clientIp);
+    const session = security.createSession(clientIp);
+
+    res.json({
+      success: true,
+      data: {
+        token: session.token,
+        expiresAt: session.expiresAt
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Admin Logout
+app.post('/api/auth/logout', (req, res) => {
+  try {
+    const token = security.extractToken(req);
+    security.revokeSession(token);
+    res.json({ success: true, message: 'Logged out successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Check Admin Status
+app.get('/api/auth/status', (req, res) => {
+  const token = security.extractToken(req);
+  const isValid = security.validateSession(token);
+  res.json({ success: true, data: { isAdmin: isValid } });
+});
+
+// Change Admin PIN (Admin Only)
+app.post('/api/auth/change-pin', security.requireAdmin, (req, res) => {
+  try {
+    const { currentPin, newPin } = req.body || {};
+    if (!newPin || String(newPin).trim().length < 4) {
+      return res.status(400).json({ success: false, error: 'New PIN must be at least 4 characters long' });
+    }
+
+    const creds = security.ensureAdminCredentials(db);
+    const isValid = security.verifyPin(currentPin, creds.hash, creds.salt);
+    if (!isValid) {
+      return res.status(401).json({ success: false, error: 'Current Admin PIN is incorrect' });
+    }
+
+    const { hash, salt } = security.hashPin(String(newPin).trim());
+    db.setSetting('admin_pin_hash', hash);
+    db.setSetting('admin_pin_salt', salt);
+
+    res.json({ success: true, message: 'Admin PIN updated successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ================= DASHBOARD & STATUS =================
+
+// Status & Dashboard summary (Public)
 app.get('/api/status', (req, res) => {
   try {
     const summary = db.getRoomSummary();
@@ -61,7 +154,7 @@ app.get('/api/status', (req, res) => {
   }
 });
 
-// Network info for mobile QR code
+// Network info for mobile QR code (Public)
 app.get('/api/system/network-info', (req, res) => {
   try {
     const ips = getLocalIpAddresses();
@@ -80,7 +173,9 @@ app.get('/api/system/network-info', (req, res) => {
   }
 });
 
-// Members
+// ================= ROOMMATES / MEMBERS =================
+
+// List all members (Public)
 app.get('/api/members', (req, res) => {
   try {
     const members = db.getAllMembers();
@@ -90,7 +185,22 @@ app.get('/api/members', (req, res) => {
   }
 });
 
-app.post('/api/members', (req, res) => {
+// Member full profile & statistics details (Public - for turn sequence click)
+app.get('/api/members/:id/details', (req, res) => {
+  try {
+    const { id } = req.params;
+    const details = db.getMemberDetails(Number(id));
+    if (!details) {
+      return res.status(404).json({ success: false, error: 'Member not found' });
+    }
+    res.json({ success: true, data: details });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Add member (Admin Only)
+app.post('/api/members', security.requireAdmin, (req, res) => {
   try {
     const { name, nickname, color, emoji } = req.body;
     if (!name || !name.trim()) {
@@ -103,7 +213,8 @@ app.post('/api/members', (req, res) => {
   }
 });
 
-app.put('/api/members/:id', (req, res) => {
+// Update member (Admin Only)
+app.put('/api/members/:id', security.requireAdmin, (req, res) => {
   try {
     const { id } = req.params;
     const updated = db.updateMember(Number(id), req.body);
@@ -116,7 +227,8 @@ app.put('/api/members/:id', (req, res) => {
   }
 });
 
-app.delete('/api/members/:id', (req, res) => {
+// Delete member (Admin Only)
+app.delete('/api/members/:id', security.requireAdmin, (req, res) => {
   try {
     const { id } = req.params;
     db.deleteMember(Number(id));
@@ -126,9 +238,10 @@ app.delete('/api/members/:id', (req, res) => {
   }
 });
 
-app.post('/api/members/reorder', (req, res) => {
+// Reorder members (Admin Only)
+app.post('/api/members/reorder', security.requireAdmin, (req, res) => {
   try {
-    const { order } = req.body; // array of member IDs
+    const { order } = req.body;
     if (!Array.isArray(order)) {
       return res.status(400).json({ success: false, error: 'Order array required' });
     }
@@ -139,8 +252,10 @@ app.post('/api/members/reorder', (req, res) => {
   }
 });
 
-// Turns
-app.post('/api/turn/complete', (req, res) => {
+// ================= TURNS & WATER ACTION =================
+
+// Complete turn: Regular roommates can report water; if admin, it's auto-confirmed, else marked pending
+app.post('/api/turn/complete', security.optionalAdmin, (req, res) => {
   try {
     const { memberId, quantity, litres, source, cost, notes, paidByMemberId } = req.body;
     const current = db.getCurrentTurnMember();
@@ -151,6 +266,9 @@ app.post('/api/turn/complete', (req, res) => {
     }
 
     const defaultLitres = Number(db.getSetting('default_can_litres') || 20);
+    const isConfirmed = req.isAdmin ? 1 : 0;
+    const confirmedBy = req.isAdmin ? 'Admin' : null;
+
     const log = db.logWater({
       memberId: effectiveMemberId,
       quantity: quantity || 1,
@@ -159,17 +277,27 @@ app.post('/api/turn/complete', (req, res) => {
       cost: cost || 0,
       paidByMemberId: paidByMemberId || effectiveMemberId,
       notes: notes || '',
-      wasTurn: 1
+      wasTurn: 1,
+      isConfirmed,
+      confirmedBy
     });
 
     const summary = db.getRoomSummary();
-    res.json({ success: true, data: { log, summary } });
+    res.json({
+      success: true,
+      data: {
+        log,
+        summary,
+        requiresAdminConfirmation: !req.isAdmin
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.post('/api/turn/skip', (req, res) => {
+// Skip Turn (Admin Only)
+app.post('/api/turn/skip', security.requireAdmin, (req, res) => {
   try {
     const { reason } = req.body || {};
     const result = db.skipCurrentTurn(reason);
@@ -183,7 +311,8 @@ app.post('/api/turn/skip', (req, res) => {
   }
 });
 
-app.post('/api/turn/swap', (req, res) => {
+// Swap Turn (Admin Only)
+app.post('/api/turn/swap', security.requireAdmin, (req, res) => {
   try {
     const { targetMemberId, reason } = req.body;
     if (!targetMemberId) {
@@ -200,7 +329,8 @@ app.post('/api/turn/swap', (req, res) => {
   }
 });
 
-app.post('/api/turn/set-current', (req, res) => {
+// Set Specific Turn (Admin Only)
+app.post('/api/turn/set-current', security.requireAdmin, (req, res) => {
   try {
     const { memberId } = req.body;
     const member = db.setSpecificTurn(Number(memberId));
@@ -214,9 +344,10 @@ app.post('/api/turn/set-current', (req, res) => {
   }
 });
 
+// Update Can Status (Public - any roommate can report can is empty/half/full)
 app.post('/api/turn/can-status', (req, res) => {
   try {
-    const { status } = req.body; // 'full', 'half', 'empty'
+    const { status } = req.body;
     if (!['full', 'half', 'empty'].includes(status)) {
       return res.status(400).json({ success: false, error: 'Invalid can status' });
     }
@@ -227,7 +358,9 @@ app.post('/api/turn/can-status', (req, res) => {
   }
 });
 
-// Logs & History
+// ================= LOGS & VERIFICATION =================
+
+// Get Recent Logs (Public)
 app.get('/api/logs', (req, res) => {
   try {
     const limit = Number(req.query.limit) || 100;
@@ -239,13 +372,15 @@ app.get('/api/logs', (req, res) => {
   }
 });
 
-app.post('/api/logs', (req, res) => {
+// Custom Log Submission: Public can submit; if admin, verified immediately
+app.post('/api/logs', security.optionalAdmin, (req, res) => {
   try {
     const { memberId, quantity, litres, source, cost, notes, paidByMemberId, wasTurn } = req.body;
     if (!memberId) {
       return res.status(400).json({ success: false, error: 'memberId is required' });
     }
     const defaultLitres = Number(db.getSetting('default_can_litres') || 20);
+    const isConfirmed = req.isAdmin ? 1 : 0;
     const log = db.logWater({
       memberId: Number(memberId),
       quantity: Number(quantity) || 1,
@@ -254,16 +389,45 @@ app.post('/api/logs', (req, res) => {
       cost: Number(cost) || 0,
       paidByMemberId: paidByMemberId ? Number(paidByMemberId) : Number(memberId),
       notes: notes || '',
-      wasTurn: wasTurn !== undefined ? (wasTurn ? 1 : 0) : 1
+      wasTurn: wasTurn !== undefined ? (wasTurn ? 1 : 0) : 1,
+      isConfirmed,
+      confirmedBy: req.isAdmin ? 'Admin' : null
     });
 
-    res.json({ success: true, data: log });
+    res.json({ success: true, data: log, requiresAdminConfirmation: !req.isAdmin });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.delete('/api/logs/:id', (req, res) => {
+// Confirm that water was really brought (Admin Only)
+app.post('/api/logs/:id/confirm', security.requireAdmin, (req, res) => {
+  try {
+    const { id } = req.params;
+    const updated = db.confirmWaterLog(Number(id), 'Admin');
+    if (!updated) {
+      return res.status(404).json({ success: false, error: 'Log entry not found' });
+    }
+    const summary = db.getRoomSummary();
+    res.json({ success: true, data: { log: updated, summary } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Confirm All Pending Water Logs (Admin Only)
+app.post('/api/logs/confirm-all', security.requireAdmin, (req, res) => {
+  try {
+    db.confirmAllLogs('Admin');
+    const summary = db.getRoomSummary();
+    res.json({ success: true, data: { summary } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete / Reject Log Entry (Admin Only)
+app.delete('/api/logs/:id', security.requireAdmin, (req, res) => {
   try {
     const { id } = req.params;
     db.deleteLog(Number(id));
@@ -273,33 +437,45 @@ app.delete('/api/logs/:id', (req, res) => {
   }
 });
 
-// Settings
+// ================= SETTINGS & BACKUP =================
+
+// Get Settings (Public)
 app.get('/api/settings', (req, res) => {
   try {
     const settings = db.getAllSettings();
+    // Do not leak password hashes in settings API
+    delete settings.admin_pin_hash;
+    delete settings.admin_pin_salt;
     res.json({ success: true, data: settings });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.post('/api/settings', (req, res) => {
+// Update Settings (Admin Only)
+app.post('/api/settings', security.requireAdmin, (req, res) => {
   try {
     const { room_name, rotation_mode, default_can_litres } = req.body;
     if (room_name !== undefined) db.setSetting('room_name', room_name.trim());
     if (rotation_mode !== undefined) db.setSetting('rotation_mode', rotation_mode);
     if (default_can_litres !== undefined) db.setSetting('default_can_litres', String(default_can_litres));
 
-    res.json({ success: true, data: db.getAllSettings() });
+    const settings = db.getAllSettings();
+    delete settings.admin_pin_hash;
+    delete settings.admin_pin_salt;
+
+    res.json({ success: true, data: settings });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Backup & Restore
+// Export Backup (Public or Admin)
 app.get('/api/backup/export', (req, res) => {
   try {
     const data = db.exportAllData();
+    // Strip sensitive hashes from export if desired
+    data.settings = (data.settings || []).filter(s => !s.key.startsWith('admin_pin_'));
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', 'attachment; filename="panipari-backup.json"');
     res.json(data);
@@ -308,7 +484,8 @@ app.get('/api/backup/export', (req, res) => {
   }
 });
 
-app.post('/api/backup/import', (req, res) => {
+// Import / Restore Backup (Admin Only)
+app.post('/api/backup/import', security.requireAdmin, (req, res) => {
   try {
     const summary = db.importAllData(req.body);
     res.json({ success: true, data: summary });
@@ -328,6 +505,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`💧 Room Water Turn Manager Server Started!`);
   console.log(`🌐 Live URL: ${DEPLOYED_URL}`);
   console.log(`🏠 Local:    http://localhost:${PORT}`);
+  console.log(`🔐 Admin PIN: Enabled (Default PIN: 1234 or configured via ADMIN_PIN)`);
   const ips = getLocalIpAddresses();
   ips.forEach(ip => {
     console.log(`📱 Mobile:   http://${ip}:${PORT}`);

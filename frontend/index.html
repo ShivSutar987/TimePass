@@ -18,6 +18,7 @@
         <div class="brand-titles">
           <div class="room-title-wrapper">
             <h1 class="room-title" id="roomNameHeader">Room Water Turn</h1>
+            <span class="badge-admin-active" id="badgeAdminActive" style="display: none;">👑 Admin</span>
             <button class="btn btn-ghost btn-sm btn-icon-only" id="btnEditRoomName" title="Rename Room">✏️</button>
           </div>
           <span class="subtitle">Room Water Duty Rotation</span>
@@ -25,6 +26,9 @@
       </div>
 
       <div class="header-actions">
+        <button class="btn btn-secondary btn-sm" id="btnAdminAuth" title="Admin Login">
+          🔐 <span class="btn-label" id="adminAuthBtnLabel">Admin Login</span>
+        </button>
         <button class="btn btn-secondary btn-sm" id="btnOpenMobileQR" title="Scan to open on phone">
           📱 <span class="btn-label">Mobile QR</span>
         </button>
@@ -40,6 +44,20 @@
 
   <!-- Main Container -->
   <main class="container">
+
+    <!-- Pending Water Confirmation Banner (Shows when logs are awaiting Admin check) -->
+    <section class="admin-notice-banner" id="unconfirmedAlertBanner" style="display: none;">
+      <div class="notice-content">
+        <span class="notice-icon">⏳</span>
+        <div class="notice-text">
+          <h4 id="unconfirmedBannerTitle">Water Log Pending Admin Confirmation</h4>
+          <p id="unconfirmedBannerText">Roommate logged water fetched. Admin please check & confirm!</p>
+        </div>
+      </div>
+      <div class="notice-actions" id="unconfirmedNoticeActions">
+        <button class="btn btn-primary btn-sm" id="btnBannerConfirmAll">✅ Confirm (Admin)</button>
+      </div>
+    </section>
 
     <!-- Urgent Water Empty Alert Banner (Hidden by default, shown when can is empty) -->
     <section class="alert-banner" id="waterAlertBanner" style="display: none;">
@@ -114,9 +132,12 @@
     <!-- Turn Rotation Queue (Visual Lineup) -->
     <section class="queue-container">
       <div class="section-header">
-        <h3 class="section-title">
-          🔄 Turn Sequence (Next in Line)
-        </h3>
+        <div>
+          <h3 class="section-title">
+            🔄 Turn Sequence (Next in Line)
+          </h3>
+          <small style="color: #38bdf8; font-size: 0.78rem; opacity: 0.9;">👆 Click any roommate to view their complete stats & history</small>
+        </div>
         <span class="subtitle" id="rotationModeText">Round Robin Rotation</span>
       </div>
       <div class="queue-flow" id="queueList">
@@ -411,9 +432,75 @@
             </div>
           </div>
 
+          <!-- Admin PIN Change Section -->
+          <div style="border-top: 1px solid var(--border-color); padding-top: 14px; margin-top: 14px;">
+            <label class="form-label">🔐 Change Admin PIN</label>
+            <p style="font-size: 0.75rem; color: #94a3b8; margin-bottom: 8px;">
+              Update the Admin PIN used to manage roommates and turns.
+            </p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <input type="password" class="form-control" id="changePinCurrent" placeholder="Current PIN (default: 1234)">
+              <input type="password" class="form-control" id="changePinNew" placeholder="New PIN (min 4 chars)">
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnSaveNewPin" style="margin-top: 8px; width: 100%;">
+              🔑 Update Admin PIN
+            </button>
+          </div>
+
           <div class="modal-footer" style="padding: 0; margin-top: 20px;">
             <button type="button" class="btn btn-secondary" data-close="modalSettings">Cancel</button>
             <button type="submit" class="btn btn-primary">Save Settings</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 7: Roommate Full Profile & Statistics (Opened on clicking queue member) -->
+  <div class="modal-overlay" id="modalMemberDetail">
+    <div class="modal-box" style="max-width: 540px;">
+      <div class="modal-header">
+        <h3 class="modal-title">👤 Roommate Profile & Stats</h3>
+        <button class="modal-close" data-close="modalMemberDetail">&times;</button>
+      </div>
+      <div class="modal-body" id="memberDetailBody">
+        <!-- Dynamically populated by JS -->
+      </div>
+      <div class="modal-footer" id="memberDetailFooter">
+        <button type="button" class="btn btn-secondary" data-close="modalMemberDetail">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal 8: Admin Login -->
+  <div class="modal-overlay" id="modalAdminLogin">
+    <div class="modal-box" style="max-width: 420px;">
+      <div class="modal-header">
+        <h3 class="modal-title">🔐 Admin Login</h3>
+        <button class="modal-close" data-close="modalAdminLogin">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: #94a3b8; font-size: 0.88rem; margin-bottom: 16px;">
+          Log in as Room Admin to add/delete roommates, skip/swap turns, confirm water brought, and configure settings.
+        </p>
+
+        <div class="alert-box error" id="adminLoginError" style="display: none; margin-bottom: 14px; padding: 10px 14px; border-radius: 6px; font-size: 0.85rem; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5;"></div>
+
+        <form id="formAdminLogin">
+          <div class="form-group">
+            <label class="form-label">Admin PIN / Password</label>
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" class="form-control" id="adminPinInput" placeholder="Enter Admin PIN" required autocomplete="current-password" style="padding-right: 44px;">
+              <button type="button" id="btnTogglePinVisibility" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: #94a3b8; font-size: 1.1rem; padding: 4px;" title="Show/Hide PIN">👁️</button>
+            </div>
+            <small style="color: #64748b; font-size: 0.78rem; display: block; margin-top: 6px;">
+              💡 Default Admin PIN is <code style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: #38bdf8;">1234</code>
+            </small>
+          </div>
+
+          <div class="modal-footer" style="padding: 0; margin-top: 20px;">
+            <button type="button" class="btn btn-secondary" data-close="modalAdminLogin">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btnSubmitAdminLogin">🔓 Unlock Admin</button>
           </div>
         </form>
       </div>

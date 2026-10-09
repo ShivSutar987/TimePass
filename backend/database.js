@@ -43,6 +43,9 @@ function initDatabase() {
       paid_by_member_id INTEGER,
       notes TEXT DEFAULT '',
       was_turn INTEGER NOT NULL DEFAULT 1,
+      is_confirmed INTEGER NOT NULL DEFAULT 1,
+      confirmed_by TEXT DEFAULT NULL,
+      confirmed_at TEXT DEFAULT NULL,
       logged_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE
     );
@@ -56,6 +59,23 @@ function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Schema migration check for water_logs
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(water_logs)").all();
+    const colNames = tableInfo.map(c => c.name);
+    if (!colNames.includes('is_confirmed')) {
+      db.exec("ALTER TABLE water_logs ADD COLUMN is_confirmed INTEGER NOT NULL DEFAULT 1;");
+    }
+    if (!colNames.includes('confirmed_by')) {
+      db.exec("ALTER TABLE water_logs ADD COLUMN confirmed_by TEXT DEFAULT NULL;");
+    }
+    if (!colNames.includes('confirmed_at')) {
+      db.exec("ALTER TABLE water_logs ADD COLUMN confirmed_at TEXT DEFAULT NULL;");
+    }
+  } catch (migErr) {
+    console.warn('Migration note for water_logs:', migErr.message);
+  }
 
   // Default settings
   const getSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
@@ -307,13 +327,17 @@ const Database = {
   },
 
   // Water Logs
-  logWater({ memberId, quantity = 1, litres = 20, source = 'Water Cooler', cost = 0, paidByMemberId = null, notes = '', wasTurn = 1 }) {
+  logWater({ memberId, quantity = 1, litres = 20, source = 'Water Cooler', cost = 0, paidByMemberId = null, notes = '', wasTurn = 1, isConfirmed = 1, confirmedBy = null }) {
     const member = this.getMemberById(memberId);
     if (!member) throw new Error('Member not found');
 
+    const confirmedFlag = (isConfirmed === 1 || isConfirmed === true) ? 1 : 0;
+    const confirmedTime = confirmedFlag === 1 ? new Date().toISOString() : null;
+    const confirmedAuthor = confirmedFlag === 1 ? (confirmedBy || 'Admin') : null;
+
     const result = db.prepare(`
-      INSERT INTO water_logs (member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO water_logs (member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn, is_confirmed, confirmed_by, confirmed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       memberId,
       Number(quantity),
@@ -322,7 +346,10 @@ const Database = {
       Number(cost),
       paidByMemberId ? Number(paidByMemberId) : memberId,
       notes,
-      wasTurn ? 1 : 0
+      wasTurn ? 1 : 0,
+      confirmedFlag,
+      confirmedAuthor,
+      confirmedTime
     );
 
     const logId = result.lastInsertRowid;
@@ -331,7 +358,7 @@ const Database = {
     db.prepare(`
       INSERT INTO turn_events (event_type, member_id, notes)
       VALUES ('completed', ?, ?)
-    `).run(memberId, `Brought ${quantity} can(s) (${litres}L) from ${source}`);
+    `).run(memberId, `Brought ${quantity} can(s) (${litres}L) from ${source}${confirmedFlag === 0 ? ' [Pending Admin confirmation]' : ''}`);
 
     // If this fulfilled turn (or was by the current turn member), advance turn
     const current = this.getCurrentTurnMember();
@@ -344,6 +371,104 @@ const Database = {
     this.setSetting('last_water_time', new Date().toISOString());
 
     return this.getLogById(logId);
+  },
+
+  confirmWaterLog(id, confirmedBy = 'Admin') {
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      UPDATE water_logs
+      SET is_confirmed = 1, confirmed_by = ?, confirmed_at = ?
+      WHERE id = ?
+    `).run(confirmedBy, now, id);
+
+    if (result.changes === 0) return null;
+    return this.getLogById(id);
+  },
+
+  confirmAllLogs(confirmedBy = 'Admin') {
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE water_logs
+      SET is_confirmed = 1, confirmed_by = ?, confirmed_at = ?
+      WHERE is_confirmed = 0
+    `).run(confirmedBy, now);
+    return true;
+  },
+
+  getUnconfirmedLogs() {
+    return db.prepare(`
+      SELECT l.*, m.name as member_name, m.color as member_color, m.emoji as member_emoji
+      FROM water_logs l
+      LEFT JOIN members m ON l.member_id = m.id
+      WHERE l.is_confirmed = 0
+      ORDER BY l.logged_at DESC, l.id DESC
+    `).all();
+  },
+
+  getMemberDetails(memberId) {
+    const member = this.getMemberById(Number(memberId));
+    if (!member) return null;
+
+    const stats = this.getMemberStats();
+    const memberStat = stats[memberId] || {
+      member_id: member.id,
+      name: member.name,
+      nickname: member.nickname,
+      color: member.color,
+      emoji: member.emoji,
+      is_active: member.is_active,
+      total_cans: 0,
+      total_litres: 0,
+      total_spent: 0,
+      turn_count: 0,
+      last_brought_at: null,
+      total_money_paid: 0
+    };
+
+    // Calculate room-wide totals & fairness
+    const totalLogs = db.prepare('SELECT COALESCE(SUM(quantity), 0) as cans, COALESCE(SUM(litres), 0) as litres FROM water_logs').get();
+    const activeMembers = this.getActiveMembers();
+    const avgCans = activeMembers.length > 0 ? (totalLogs.cans / activeMembers.length) : 0;
+    const delta = member.is_active ? Number((memberStat.total_cans - avgCans).toFixed(1)) : 0;
+    const contributionPercent = totalLogs.cans > 0 ? Number(((memberStat.total_cans / totalLogs.cans) * 100).toFixed(1)) : 0;
+
+    // Queue status and position
+    const currentTurn = this.getCurrentTurnMember();
+    const queue = this.getTurnQueue();
+    const queueIndex = queue.findIndex(m => m.id === Number(memberId));
+    let queueStatus = 'In Queue';
+    if (!member.is_active) {
+      queueStatus = 'On Vacation / Away';
+    } else if (currentTurn && currentTurn.id === Number(memberId)) {
+      queueStatus = 'Current Turn (Now)';
+    } else if (queueIndex === 1) {
+      queueStatus = 'Up Next';
+    } else if (queueIndex > 1) {
+      queueStatus = `#${queueIndex + 1} in Line`;
+    }
+
+    // Recent logs specifically for this member
+    const recentLogs = db.prepare(`
+      SELECT l.*, p.name as paid_by_name
+      FROM water_logs l
+      LEFT JOIN members p ON l.paid_by_member_id = p.id
+      WHERE l.member_id = ?
+      ORDER BY l.logged_at DESC, l.id DESC
+      LIMIT 10
+    `).all(memberId);
+
+    return {
+      member,
+      stats: {
+        ...memberStat,
+        delta_from_avg: delta,
+        contribution_percent: contributionPercent
+      },
+      queuePosition: queueIndex >= 0 ? queueIndex + 1 : null,
+      queueStatus,
+      isCurrentTurn: currentTurn ? currentTurn.id === Number(memberId) : false,
+      recentLogs
+    };
   },
 
   getLogById(id) {
@@ -444,6 +569,7 @@ const Database = {
 
   getRoomSummary() {
     const totalLogs = db.prepare('SELECT COUNT(*) as count, COALESCE(SUM(quantity), 0) as cans, COALESCE(SUM(litres), 0) as litres, COALESCE(SUM(cost), 0) as cost FROM water_logs').get();
+    const unconfirmedRow = db.prepare('SELECT COUNT(*) as count FROM water_logs WHERE is_confirmed = 0').get();
     const currentTurn = this.getCurrentTurnMember();
     const nextTurn = this.getNextTurnMember();
     const queue = this.getTurnQueue();
@@ -465,6 +591,7 @@ const Database = {
       nextTurn,
       queue,
       stats,
+      unconfirmedCount: unconfirmedRow ? unconfirmedRow.count : 0,
       totals: {
         totalTurns: totalLogs.count,
         totalCans: totalLogs.cans,
@@ -519,11 +646,25 @@ const Database = {
 
       if (data.logs && Array.isArray(data.logs)) {
         const insertLog = db.prepare(`
-          INSERT INTO water_logs (id, member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn, logged_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO water_logs (id, member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn, is_confirmed, confirmed_by, confirmed_at, logged_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         data.logs.forEach(l => {
-          insertLog.run(l.id, l.member_id, l.quantity, l.litres, l.source || '', l.cost || 0, l.paid_by_member_id, l.notes || '', l.was_turn || 1, l.logged_at);
+          insertLog.run(
+            l.id,
+            l.member_id,
+            l.quantity,
+            l.litres,
+            l.source || '',
+            l.cost || 0,
+            l.paid_by_member_id,
+            l.notes || '',
+            l.was_turn !== undefined ? l.was_turn : 1,
+            l.is_confirmed !== undefined ? l.is_confirmed : 1,
+            l.confirmed_by || null,
+            l.confirmed_at || null,
+            l.logged_at
+          );
         });
       }
 
