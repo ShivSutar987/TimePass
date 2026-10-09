@@ -1,0 +1,13 @@
+{
+  "name": "panipari-room-water-turns",
+  "version": "1.0.0",
+  "description": "Room water turn and duty rotation tracker",
+  "main": "backend/server.js",
+  "scripts": {
+    "build": "cd backend && npm install",
+    "start": "node backend/server.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

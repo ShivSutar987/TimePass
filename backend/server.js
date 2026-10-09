@@ -2,7 +2,24 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const db = require('./database');
+
+// Automatically load .env file if it exists (checks backend/.env or root .env)
+const possibleEnvPaths = [
+  path.join(__dirname, '.env'),
+  path.join(__dirname, '..', '.env')
+];
+for (const envPath of possibleEnvPaths) {
+  if (fs.existsSync(envPath) && typeof process.loadEnvFile === 'function') {
+    try {
+      process.loadEnvFile(envPath);
+      break;
+    } catch (e) {
+      console.warn('Could not load .env file:', e.message);
+    }
+  }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -271,6 +288,27 @@ app.post('/api/settings', (req, res) => {
     if (default_can_litres !== undefined) db.setSetting('default_can_litres', String(default_can_litres));
 
     res.json({ success: true, data: db.getAllSettings() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Backup & Restore
+app.get('/api/backup/export', (req, res) => {
+  try {
+    const data = db.exportAllData();
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="panipari-backup.json"');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/backup/import', (req, res) => {
+  try {
+    const summary = db.importAllData(req.body);
+    res.json({ success: true, data: summary });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

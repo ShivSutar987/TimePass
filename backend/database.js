@@ -473,6 +473,76 @@ const Database = {
         averageCansPerPerson: Number(avgCans.toFixed(1))
       }
     };
+  },
+
+  exportAllData() {
+    const members = db.prepare('SELECT * FROM members').all();
+    const settings = db.prepare('SELECT * FROM settings').all();
+    const logs = db.prepare('SELECT * FROM water_logs').all();
+    const events = db.prepare('SELECT * FROM turn_events').all();
+    return {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      members,
+      settings,
+      logs,
+      events
+    };
+  },
+
+  importAllData(data) {
+    if (!data || !data.members || !Array.isArray(data.members)) {
+      throw new Error('Invalid backup data format');
+    }
+
+    db.exec('BEGIN TRANSACTION;');
+    try {
+      db.exec('DELETE FROM water_logs;');
+      db.exec('DELETE FROM turn_events;');
+      db.exec('DELETE FROM members;');
+      db.exec('DELETE FROM settings;');
+
+      const insertMember = db.prepare(`
+        INSERT INTO members (id, name, nickname, color, emoji, is_active, order_index, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      data.members.forEach(m => {
+        insertMember.run(m.id, m.name, m.nickname || '', m.color || '#3b82f6', m.emoji || '💧', m.is_active !== undefined ? m.is_active : 1, m.order_index || 0, m.created_at || new Date().toISOString());
+      });
+
+      if (data.settings && Array.isArray(data.settings)) {
+        const insertSetting = db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)');
+        data.settings.forEach(s => {
+          insertSetting.run(s.key, s.value);
+        });
+      }
+
+      if (data.logs && Array.isArray(data.logs)) {
+        const insertLog = db.prepare(`
+          INSERT INTO water_logs (id, member_id, quantity, litres, source, cost, paid_by_member_id, notes, was_turn, logged_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        data.logs.forEach(l => {
+          insertLog.run(l.id, l.member_id, l.quantity, l.litres, l.source || '', l.cost || 0, l.paid_by_member_id, l.notes || '', l.was_turn || 1, l.logged_at);
+        });
+      }
+
+      if (data.events && Array.isArray(data.events)) {
+        const insertEvent = db.prepare(`
+          INSERT INTO turn_events (id, event_type, member_id, target_member_id, notes, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `);
+        data.events.forEach(e => {
+          insertEvent.run(e.id, e.event_type, e.member_id, e.target_member_id, e.notes || '', e.created_at);
+        });
+      }
+
+      db.exec('COMMIT;');
+      return this.getRoomSummary();
+    } catch (err) {
+      db.exec('ROLLBACK;');
+      throw err;
+    }
   }
 };
 

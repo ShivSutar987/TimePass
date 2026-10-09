@@ -764,7 +764,8 @@ function renderMobileQrModal() {
   if (!qrContainer) return;
   qrContainer.innerHTML = '';
 
-  const mobileUrl = appState.networkInfo?.mobileUrls?.[0] || window.location.origin;
+  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  const mobileUrl = isLocalhost ? (appState.networkInfo?.mobileUrls?.[0] || window.location.origin) : window.location.origin;
 
   if (ipText) ipText.textContent = mobileUrl;
   if (btnDirectOpen) btnDirectOpen.href = mobileUrl;
@@ -937,6 +938,50 @@ document.addEventListener('DOMContentLoaded', async () => {
     const rotation_mode = document.getElementById('settingsRotationMode').value;
     const default_can_litres = document.getElementById('settingsDefaultLitres').value;
     await saveRoomSettings(room_name, rotation_mode, default_can_litres);
+  });
+
+  // Export Backup
+  document.getElementById('btnExportBackup')?.addEventListener('click', async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/backup/export`);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `panipari-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Backup downloaded successfully!', 'success');
+    } catch (err) {
+      showToast('Failed to export backup', 'error');
+    }
+  });
+
+  // Import Backup
+  document.getElementById('btnImportBackupFile')?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      const res = await fetch(`${API_BASE}/api/backup/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json)
+      });
+      const result = await res.json();
+      if (result.success) {
+        showToast('Backup restored successfully!', 'success');
+        closeModal('modalSettings');
+        await loadData();
+        await loadLogs();
+      } else {
+        showToast(result.error || 'Failed to restore backup', 'error');
+      }
+    } catch (err) {
+      showToast('Invalid backup file', 'error');
+    }
   });
 
   // 11. Activity Log Filter
