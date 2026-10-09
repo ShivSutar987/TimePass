@@ -58,8 +58,9 @@ node server.js
 ```
 
 Then open your browser at:
-- **Computer**: [http://localhost:3000](http://localhost:3000)
-- **Mobile Phones on the same Wi-Fi**: The terminal will print your mobile IP (e.g. `http://192.168.x.x:3000`) or scan the QR code from the website!
+- **Live Deployed App**: [https://timepass-0vuz.onrender.com](https://timepass-0vuz.onrender.com)
+- **Local Development**: [http://localhost:3000](http://localhost:3000)
+- **Mobile Phones**: Open [https://timepass-0vuz.onrender.com](https://timepass-0vuz.onrender.com) or scan the QR code from the app!
 
 ---
 

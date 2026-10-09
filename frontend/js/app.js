@@ -764,8 +764,9 @@ function renderMobileQrModal() {
   if (!qrContainer) return;
   qrContainer.innerHTML = '';
 
+  const RENDER_LIVE_URL = 'https://timepass-0vuz.onrender.com';
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-  const mobileUrl = isLocalhost ? (appState.networkInfo?.mobileUrls?.[0] || window.location.origin) : window.location.origin;
+  const mobileUrl = !isLocalhost ? window.location.origin : (RENDER_LIVE_URL || appState.networkInfo?.deployedUrl || window.location.origin);
 
   if (ipText) ipText.textContent = mobileUrl;
   if (btnDirectOpen) btnDirectOpen.href = mobileUrl;

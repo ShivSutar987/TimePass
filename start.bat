@@ -8,6 +8,7 @@ cd /d "%~dp0backend"
 
 echo Starting server...
 echo Local Address:  http://localhost:3000
+echo Live Render URL: https://timepass-0vuz.onrender.com
 echo.
 node server.js
 pause

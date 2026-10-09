@@ -47,6 +47,8 @@ function getLocalIpAddresses() {
   return addresses;
 }
 
+const DEPLOYED_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || 'https://timepass-0vuz.onrender.com';
+
 // ================= API ENDPOINTS =================
 
 // Status & Dashboard summary
@@ -67,9 +69,10 @@ app.get('/api/system/network-info', (req, res) => {
       success: true,
       data: {
         port: PORT,
+        deployedUrl: DEPLOYED_URL,
         localIps: ips,
-        mobileUrls: ips.map(ip => `http://${ip}:${PORT}`),
-        localhostUrl: `http://localhost:${PORT}`
+        mobileUrls: [DEPLOYED_URL, ...ips.map(ip => `http://${ip}:${PORT}`)],
+        localhostUrl: DEPLOYED_URL
       }
     });
   } catch (err) {
@@ -323,10 +326,11 @@ app.use((req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`=======================================================`);
   console.log(`💧 Room Water Turn Manager Server Started!`);
-  console.log(`🏠 Local:   http://localhost:${PORT}`);
+  console.log(`🌐 Live URL: ${DEPLOYED_URL}`);
+  console.log(`🏠 Local:    http://localhost:${PORT}`);
   const ips = getLocalIpAddresses();
   ips.forEach(ip => {
-    console.log(`📱 Mobile:  http://${ip}:${PORT}`);
+    console.log(`📱 Mobile:   http://${ip}:${PORT}`);
   });
   console.log(`=======================================================`);
 });
