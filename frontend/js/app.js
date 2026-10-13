@@ -622,19 +622,29 @@ async function openMemberDetailModal(memberId) {
     // Admin Quick Controls inside the modal
     let adminControlsHtml = '';
     if (isAdmin) {
-      adminControlsHtml = `
-        <div class="member-admin-controls">
-          <button class="btn btn-primary btn-sm" id="btnModalSetCurrentTurn" style="flex: 1;">
-            🎯 Assign Current Turn
-          </button>
-          <button class="btn btn-secondary btn-sm" id="btnModalToggleVacation" style="flex: 1;">
-            ${member.is_active ? '🏖️ Put on Vacation' : '🟢 Set Active'}
-          </button>
-          <button class="btn btn-danger btn-sm" id="btnModalDeleteMember">
-            🗑️ Delete
-          </button>
-        </div>
-      `;
+      if (member.is_deleted) {
+        adminControlsHtml = `
+          <div class="member-admin-controls">
+            <button class="btn btn-primary btn-sm" id="btnModalRestoreMember" style="flex: 1;">
+              🔄 Restore to Active Roommates
+            </button>
+          </div>
+        `;
+      } else {
+        adminControlsHtml = `
+          <div class="member-admin-controls">
+            <button class="btn btn-primary btn-sm" id="btnModalSetCurrentTurn" style="flex: 1;">
+              🎯 Assign Current Turn
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btnModalToggleVacation" style="flex: 1;">
+              ${member.is_active ? '🏖️ Put on Vacation' : '🟢 Set Active'}
+            </button>
+            <button class="btn btn-danger btn-sm" id="btnModalDeleteMember">
+              🗑️ Delete
+            </button>
+          </div>
+        `;
+      }
     }
 
     modalBody.innerHTML = `
@@ -652,8 +662,8 @@ async function openMemberDetailModal(memberId) {
             <span class="profile-badge ${isCurrentTurn ? 'current' : queuePosition === 2 ? 'next' : ''}">
               ${escapeHtml(queueStatus)}
             </span>
-            <span class="profile-badge ${!member.is_active ? 'vacation' : ''}">
-              ${member.is_active ? '🟢 Active Duty' : '🏖️ Away / Vacation'}
+            <span class="profile-badge ${member.is_deleted ? 'vacation' : !member.is_active ? 'vacation' : ''}">
+              ${member.is_deleted ? '📁 Archived (Turns Preserved)' : member.is_active ? '🟢 Active Duty' : '🏖️ Away / Vacation'}
             </span>
             ${queuePosition ? `<span class="profile-badge">Queue Position: #${queuePosition}</span>` : ''}
           </div>
@@ -708,6 +718,11 @@ async function openMemberDetailModal(memberId) {
 
     // Wire up Admin Quick actions inside modal if Admin
     if (isAdmin) {
+      document.getElementById('btnModalRestoreMember')?.addEventListener('click', async () => {
+        await restoreMember(member.id);
+        closeModal('modalMemberDetail');
+      });
+
       document.getElementById('btnModalSetCurrentTurn')?.addEventListener('click', async () => {
         await setCurrentTurn(member.id);
         closeModal('modalMemberDetail');
@@ -719,7 +734,7 @@ async function openMemberDetailModal(memberId) {
       });
 
       document.getElementById('btnModalDeleteMember')?.addEventListener('click', async () => {
-        if (confirm(`Are you sure you want to remove ${member.name} from the room?`)) {
+        if (confirm(`Archive ${member.name}? Past water logs and turns remain permanently saved in the database.`)) {
           await deleteMember(member.id);
           closeModal('modalMemberDetail');
         }
@@ -732,35 +747,100 @@ async function openMemberDetailModal(memberId) {
   }
 }
 
-function renderManageMembers() {
+async function renderManageMembers() {
   const list = document.getElementById('manageMemberList');
+  const deletedSection = document.getElementById('deletedMembersSection');
+  const deletedList = document.getElementById('manageDeletedMemberList');
+  const badge = document.getElementById('deletedMembersCountBadge');
   if (!list) return;
 
   const members = appState.summary?.stats || [];
   list.innerHTML = '';
 
-  members.forEach(m => {
-    const row = document.createElement('div');
-    row.className = 'member-row-manage';
-    row.innerHTML = `
-      <div class="member-row-info">
-        <div style="width: 30px; height: 30px; border-radius: 50%; background: ${m.color}; display: flex; align-items: center; justify-content: center; font-size: 16px;">
-          ${m.emoji}
+  if (members.length === 0) {
+    list.innerHTML = `<div style="text-align: center; color: #94a3b8; padding: 12px;">No active roommates</div>`;
+  } else {
+    members.forEach(m => {
+      const row = document.createElement('div');
+      row.className = 'member-row-manage';
+      row.innerHTML = `
+        <div class="member-row-info">
+          <div style="width: 32px; height: 32px; border-radius: 50%; background: ${m.color || '#3b82f6'}; display: flex; align-items: center; justify-content: center; font-size: 16px;">
+            ${m.emoji || '💧'}
+          </div>
+          <div>
+            <strong style="font-size: 0.9rem; color: #fff;">${escapeHtml(m.name)}</strong>
+            ${m.nickname ? `<span style="font-size: 0.78rem; color: #94a3b8;">(${escapeHtml(m.nickname)})</span>` : ''}
+            <div style="font-size: 0.72rem; color: #94a3b8;">${m.total_cans || 0} can(s) • ${m.turn_count || 0} turn(s)</div>
+          </div>
         </div>
-        <div>
-          <strong style="font-size: 0.9rem; color: #fff;">${escapeHtml(m.name)}</strong>
-          ${m.nickname ? `<span style="font-size: 0.78rem; color: #94a3b8;">(${escapeHtml(m.nickname)})</span>` : ''}
+        <div class="member-row-actions">
+          <button class="toggle-away-btn ${!m.is_active ? 'away' : ''}" data-member-id="${m.member_id}" data-active="${m.is_active}" title="${m.is_active ? 'Mark as Away / Vacation' : 'Mark as Active duty'}">
+            ${m.is_active ? '🟢 Present' : '🏖️ Away'}
+          </button>
+          <button class="btn btn-danger btn-sm" data-delete-member="${m.member_id}" title="Archive roommate (Turns & history stay saved in DB)">🗑️</button>
         </div>
-      </div>
-      <div class="member-row-actions">
-        <button class="toggle-away-btn ${!m.is_active ? 'away' : ''}" data-member-id="${m.member_id}" data-active="${m.is_active}">
-          ${m.is_active ? '✅ Active' : '🏖️ Away'}
-        </button>
-        <button class="btn btn-danger btn-sm" data-delete-member="${m.member_id}">🗑️</button>
-      </div>
-    `;
-    list.appendChild(row);
-  });
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  // Fetch deleted / former members if Admin
+  if (isAdmin && deletedSection && deletedList) {
+    try {
+      const res = await fetch(`${API_BASE}/api/members/deleted`, {
+        headers: getAuthHeaders()
+      });
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        deletedSection.style.display = 'block';
+        if (badge) badge.textContent = json.data.length;
+        deletedList.innerHTML = '';
+
+        json.data.forEach(dm => {
+          const row = document.createElement('div');
+          row.className = 'member-row-manage';
+          row.style.background = 'rgba(15, 23, 42, 0.4)';
+          row.style.borderColor = 'rgba(148, 163, 184, 0.2)';
+          row.innerHTML = `
+            <div class="member-row-info">
+              <div style="width: 32px; height: 32px; border-radius: 50%; background: #475569; display: flex; align-items: center; justify-content: center; font-size: 16px; opacity: 0.85;">
+                ${dm.emoji || '👤'}
+              </div>
+              <div>
+                <strong style="font-size: 0.88rem; color: #cbd5e1;">${escapeHtml(dm.name)}</strong>
+                ${dm.nickname ? `<span style="font-size: 0.75rem; color: #64748b;">(${escapeHtml(dm.nickname)})</span>` : ''}
+                <div style="font-size: 0.7rem; color: #64748b;">Archived ${formatDateTime(dm.deleted_at)}</div>
+              </div>
+            </div>
+            <div class="member-row-actions">
+              <button class="btn btn-secondary btn-sm" data-restore-member="${dm.id}" title="Restore roommate back to active rotation">
+                🔄 Restore
+              </button>
+            </div>
+          `;
+          deletedList.appendChild(row);
+        });
+
+        // Attach restore handlers
+        deletedList.querySelectorAll('[data-restore-member]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const id = btn.dataset.restoreMember;
+            await restoreMember(id);
+            await renderManageMembers();
+          });
+        });
+
+      } else {
+        deletedSection.style.display = 'none';
+        if (badge) badge.textContent = '0';
+      }
+    } catch (e) {
+      console.warn('Error loading deleted members:', e);
+    }
+  } else if (deletedSection) {
+    deletedSection.style.display = 'none';
+  }
 
   // Attach toggle active/away listeners (requires Admin)
   list.querySelectorAll('.toggle-away-btn').forEach(btn => {
@@ -768,7 +848,7 @@ function renderManageMembers() {
       const id = btn.dataset.memberId;
       const currentActive = btn.dataset.active === '1' || btn.dataset.active === 'true';
       await updateMember(id, { is_active: !currentActive });
-      renderManageMembers();
+      await renderManageMembers();
     });
   });
 
@@ -776,9 +856,9 @@ function renderManageMembers() {
   list.querySelectorAll('[data-delete-member]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const id = btn.dataset.deleteMember;
-      if (confirm('Are you sure you want to remove this roommate?')) {
+      if (confirm('Archive this roommate? All past water logs and turns remain permanently saved in the database!')) {
         await deleteMember(id);
-        renderManageMembers();
+        await renderManageMembers();
       }
     });
   });
@@ -1081,7 +1161,7 @@ async function addMember(name, nickname, color, emoji) {
     if (json.success) {
       showToast(`Added ${name} to the room!`, 'success');
       await loadData();
-      renderManageMembers();
+      await renderManageMembers();
     } else {
       showToast(json.error || 'Error adding roommate', 'error');
     }
@@ -1117,10 +1197,28 @@ async function deleteMember(id) {
     });
     const json = await res.json();
     if (json.success) {
-      showToast('Roommate removed', 'info');
+      showToast('Roommate archived. Past turns & logs preserved in DB.', 'info');
       await loadData();
     } else {
       showToast(json.error || 'Failed to remove roommate', 'error');
+    }
+  } catch (err) {
+    showToast('Network error', 'error');
+  }
+}
+
+async function restoreMember(id) {
+  try {
+    const res = await fetch(`${API_BASE}/api/members/${id}/restore`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    const json = await res.json();
+    if (json.success) {
+      showToast(json.message || 'Roommate restored successfully!', 'success');
+      await loadData();
+    } else {
+      showToast(json.error || 'Failed to restore roommate', 'error');
     }
   } catch (err) {
     showToast('Network error', 'error');

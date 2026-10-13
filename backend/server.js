@@ -3,8 +3,6 @@ const cors = require('cors');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const db = require('./database');
-const security = require('./security');
 
 // Automatically load .env file if it exists (checks backend/.env or root .env)
 const possibleEnvPaths = [
@@ -15,15 +13,14 @@ for (const envPath of possibleEnvPaths) {
   if (fs.existsSync(envPath) && typeof process.loadEnvFile === 'function') {
     try {
       process.loadEnvFile(envPath);
-      break;
     } catch (e) {
       console.warn('Could not load .env file:', e.message);
     }
   }
 }
 
-// Ensure Admin Credentials initialized on startup
-security.ensureAdminCredentials(db);
+const db = require('./database');
+const security = require('./security');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,7 +53,7 @@ const DEPLOYED_URL = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL || '
 // ================= AUTHENTICATION & SECURITY ENDPOINTS =================
 
 // Admin Login with Brute-Force Rate Limiting (Real Admin: "ShivSutar@22.132")
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
     const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
     
@@ -102,12 +99,12 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // Demo Admin Login (Temporary Sandbox Mode with Auto-Cleanup on logout)
-app.post('/api/auth/demo-login', (req, res) => {
+app.post('/api/auth/demo-login', async (req, res) => {
   try {
     const clientIp = req.ip || req.socket?.remoteAddress || '127.0.0.1';
     
     // Snapshot current baseline so everything can be restored on logout
-    db.saveDemoSnapshot();
+    await db.saveDemoSnapshot();
 
     // Create a demo session
     const session = security.createSession(clientIp, true);
@@ -127,7 +124,7 @@ app.post('/api/auth/demo-login', (req, res) => {
 });
 
 // Admin Logout (Cleans up sandbox if was in Demo mode)
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', async (req, res) => {
   try {
     const token = security.extractToken(req);
     const session = security.getSession(token);
@@ -135,11 +132,11 @@ app.post('/api/auth/logout', (req, res) => {
 
     if (wasDemo) {
       // Automatic cleanup: restore clean default state
-      db.restoreDemoSnapshot();
+      await db.restoreDemoSnapshot();
     }
 
     security.revokeSession(token);
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
 
     res.json({
       success: true,
@@ -170,7 +167,7 @@ app.get('/api/auth/status', (req, res) => {
 });
 
 // Change Admin Password (Real Admin Only - Blocked in Demo Mode)
-app.post('/api/auth/change-pin', security.requireAdmin, (req, res) => {
+app.post('/api/auth/change-pin', security.requireAdmin, async (req, res) => {
   try {
     if (req.isDemo) {
       return res.status(403).json({
@@ -191,8 +188,8 @@ app.post('/api/auth/change-pin', security.requireAdmin, (req, res) => {
     }
 
     const { hash, salt } = security.hashPin(String(newPin).trim());
-    db.setSetting('admin_pin_hash', hash);
-    db.setSetting('admin_pin_salt', salt);
+    await db.setSetting('admin_pin_hash', hash);
+    await db.setSetting('admin_pin_salt', salt);
 
     res.json({ success: true, message: 'Admin Password updated successfully' });
   } catch (err) {
@@ -203,9 +200,9 @@ app.post('/api/auth/change-pin', security.requireAdmin, (req, res) => {
 // ================= DASHBOARD & STATUS =================
 
 // Status & Dashboard summary (Public)
-app.get('/api/status', (req, res) => {
+app.get('/api/status', async (req, res) => {
   try {
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: summary });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -233,21 +230,32 @@ app.get('/api/system/network-info', (req, res) => {
 
 // ================= ROOMMATES / MEMBERS =================
 
-// List all members (Public)
-app.get('/api/members', (req, res) => {
+// List members (Public, non-deleted by default; ?include_deleted=1 to include all)
+app.get('/api/members', async (req, res) => {
   try {
-    const members = db.getAllMembers();
+    const includeDeleted = req.query.include_deleted === '1' || req.query.include_deleted === 'true';
+    const members = await db.getAllMembers(includeDeleted);
     res.json({ success: true, data: members });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
+// List former / deleted members (Admin Only)
+app.get('/api/members/deleted', security.requireAdmin, async (req, res) => {
+  try {
+    const deleted = await db.getDeletedMembers();
+    res.json({ success: true, data: deleted });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Member full profile & statistics details (Public - for turn sequence click)
-app.get('/api/members/:id/details', (req, res) => {
+app.get('/api/members/:id/details', async (req, res) => {
   try {
     const { id } = req.params;
-    const details = db.getMemberDetails(Number(id));
+    const details = await db.getMemberDetails(Number(id));
     if (!details) {
       return res.status(404).json({ success: false, error: 'Member not found' });
     }
@@ -258,13 +266,13 @@ app.get('/api/members/:id/details', (req, res) => {
 });
 
 // Add member (Admin Only)
-app.post('/api/members', security.requireAdmin, (req, res) => {
+app.post('/api/members', security.requireAdmin, async (req, res) => {
   try {
     const { name, nickname, color, emoji } = req.body;
     if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: 'Name is required' });
     }
-    const member = db.addMember(name, nickname, color, emoji);
+    const member = await db.addMember(name, nickname, color, emoji);
     res.json({ success: true, data: member });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -272,10 +280,10 @@ app.post('/api/members', security.requireAdmin, (req, res) => {
 });
 
 // Update member (Admin Only)
-app.put('/api/members/:id', security.requireAdmin, (req, res) => {
+app.put('/api/members/:id', security.requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = db.updateMember(Number(id), req.body);
+    const updated = await db.updateMember(Number(id), req.body);
     if (!updated) {
       return res.status(404).json({ success: false, error: 'Member not found' });
     }
@@ -285,25 +293,39 @@ app.put('/api/members/:id', security.requireAdmin, (req, res) => {
   }
 });
 
-// Delete member (Admin Only)
-app.delete('/api/members/:id', security.requireAdmin, (req, res) => {
+// Delete member (Admin Only - Soft Deletes in database, preserving all past water logs & turns)
+app.delete('/api/members/:id', security.requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    db.deleteMember(Number(id));
-    res.json({ success: true, message: 'Member deleted' });
+    await db.deleteMember(Number(id));
+    res.json({ success: true, message: 'Member archived. Past water logs and turns preserved in database.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Restore former member (Admin Only)
+app.post('/api/members/:id/restore', security.requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const restored = await db.restoreMember(Number(id));
+    if (!restored) {
+      return res.status(404).json({ success: false, error: 'Member not found or could not be restored' });
+    }
+    res.json({ success: true, data: restored, message: `${restored.name} restored to active roommate roster.` });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // Reorder members (Admin Only)
-app.post('/api/members/reorder', security.requireAdmin, (req, res) => {
+app.post('/api/members/reorder', security.requireAdmin, async (req, res) => {
   try {
     const { order } = req.body;
     if (!Array.isArray(order)) {
       return res.status(400).json({ success: false, error: 'Order array required' });
     }
-    const members = db.reorderMembers(order);
+    const members = await db.reorderMembers(order);
     res.json({ success: true, data: members });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -313,10 +335,10 @@ app.post('/api/members/reorder', security.requireAdmin, (req, res) => {
 // ================= TURNS & WATER ACTION =================
 
 // Complete turn: Regular roommates can report water; if admin, it's auto-confirmed, else marked pending
-app.post('/api/turn/complete', security.optionalAdmin, (req, res) => {
+app.post('/api/turn/complete', security.optionalAdmin, async (req, res) => {
   try {
     const { memberId, quantity, litres, source, cost, notes, paidByMemberId } = req.body;
-    const current = db.getCurrentTurnMember();
+    const current = await db.getCurrentTurnMember();
     const effectiveMemberId = memberId || (current ? current.id : null);
 
     if (!effectiveMemberId) {
@@ -327,7 +349,7 @@ app.post('/api/turn/complete', security.optionalAdmin, (req, res) => {
     const isConfirmed = req.isAdmin ? 1 : 0;
     const confirmedBy = req.isAdmin ? 'Admin' : null;
 
-    const log = db.logWater({
+    const log = await db.logWater({
       memberId: effectiveMemberId,
       quantity: quantity || 1,
       litres: litres || (Number(quantity || 1) * defaultLitres),
@@ -340,7 +362,7 @@ app.post('/api/turn/complete', security.optionalAdmin, (req, res) => {
       confirmedBy
     });
 
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({
       success: true,
       data: {
@@ -355,14 +377,14 @@ app.post('/api/turn/complete', security.optionalAdmin, (req, res) => {
 });
 
 // Skip Turn (Admin Only)
-app.post('/api/turn/skip', security.requireAdmin, (req, res) => {
+app.post('/api/turn/skip', security.requireAdmin, async (req, res) => {
   try {
     const { reason } = req.body || {};
-    const result = db.skipCurrentTurn(reason);
+    const result = await db.skipCurrentTurn(reason);
     if (!result) {
       return res.status(400).json({ success: false, error: 'Cannot skip turn (insufficient members)' });
     }
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: { ...result, summary } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -370,17 +392,17 @@ app.post('/api/turn/skip', security.requireAdmin, (req, res) => {
 });
 
 // Swap Turn (Admin Only)
-app.post('/api/turn/swap', security.requireAdmin, (req, res) => {
+app.post('/api/turn/swap', security.requireAdmin, async (req, res) => {
   try {
     const { targetMemberId, reason } = req.body;
     if (!targetMemberId) {
       return res.status(400).json({ success: false, error: 'Target member ID required' });
     }
-    const result = db.swapTurn(Number(targetMemberId), reason);
+    const result = await db.swapTurn(Number(targetMemberId), reason);
     if (!result) {
       return res.status(400).json({ success: false, error: 'Could not swap turn' });
     }
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: { ...result, summary } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -388,14 +410,14 @@ app.post('/api/turn/swap', security.requireAdmin, (req, res) => {
 });
 
 // Set Specific Turn (Admin Only)
-app.post('/api/turn/set-current', security.requireAdmin, (req, res) => {
+app.post('/api/turn/set-current', security.requireAdmin, async (req, res) => {
   try {
     const { memberId } = req.body;
-    const member = db.setSpecificTurn(Number(memberId));
+    const member = await db.setSpecificTurn(Number(memberId));
     if (!member) {
       return res.status(400).json({ success: false, error: 'Invalid member' });
     }
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: { currentTurn: member, summary } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -403,13 +425,13 @@ app.post('/api/turn/set-current', security.requireAdmin, (req, res) => {
 });
 
 // Update Can Status (Public - any roommate can report can is empty/half/full)
-app.post('/api/turn/can-status', (req, res) => {
+app.post('/api/turn/can-status', async (req, res) => {
   try {
     const { status } = req.body;
     if (!['full', 'half', 'empty'].includes(status)) {
       return res.status(400).json({ success: false, error: 'Invalid can status' });
     }
-    db.setSetting('can_status', status);
+    await db.setSetting('can_status', status);
     res.json({ success: true, data: { can_status: status } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -419,11 +441,11 @@ app.post('/api/turn/can-status', (req, res) => {
 // ================= LOGS & VERIFICATION =================
 
 // Get Recent Logs (Public)
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', async (req, res) => {
   try {
     const limit = Number(req.query.limit) || 100;
     const memberId = req.query.memberId ? Number(req.query.memberId) : null;
-    const logs = db.getRecentLogs(limit, memberId);
+    const logs = await db.getRecentLogs(limit, memberId);
     res.json({ success: true, data: logs });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -431,7 +453,7 @@ app.get('/api/logs', (req, res) => {
 });
 
 // Custom Log Submission: Public can submit; if admin, verified immediately
-app.post('/api/logs', security.optionalAdmin, (req, res) => {
+app.post('/api/logs', security.optionalAdmin, async (req, res) => {
   try {
     const { memberId, quantity, litres, source, cost, notes, paidByMemberId, wasTurn } = req.body;
     if (!memberId) {
@@ -439,7 +461,7 @@ app.post('/api/logs', security.optionalAdmin, (req, res) => {
     }
     const defaultLitres = Number(db.getSetting('default_can_litres') || 20);
     const isConfirmed = req.isAdmin ? 1 : 0;
-    const log = db.logWater({
+    const log = await db.logWater({
       memberId: Number(memberId),
       quantity: Number(quantity) || 1,
       litres: Number(litres) || (Number(quantity || 1) * defaultLitres),
@@ -459,14 +481,14 @@ app.post('/api/logs', security.optionalAdmin, (req, res) => {
 });
 
 // Confirm that water was really brought (Admin Only)
-app.post('/api/logs/:id/confirm', security.requireAdmin, (req, res) => {
+app.post('/api/logs/:id/confirm', security.requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const updated = db.confirmWaterLog(Number(id), 'Admin');
+    const updated = await db.confirmWaterLog(Number(id), 'Admin');
     if (!updated) {
       return res.status(404).json({ success: false, error: 'Log entry not found' });
     }
-    const summary = db.getRoomSummary();
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: { log: updated, summary } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -474,10 +496,10 @@ app.post('/api/logs/:id/confirm', security.requireAdmin, (req, res) => {
 });
 
 // Confirm All Pending Water Logs (Admin Only)
-app.post('/api/logs/confirm-all', security.requireAdmin, (req, res) => {
+app.post('/api/logs/confirm-all', security.requireAdmin, async (req, res) => {
   try {
-    db.confirmAllLogs('Admin');
-    const summary = db.getRoomSummary();
+    await db.confirmAllLogs('Admin');
+    const summary = await db.getRoomSummary();
     res.json({ success: true, data: { summary } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -485,10 +507,10 @@ app.post('/api/logs/confirm-all', security.requireAdmin, (req, res) => {
 });
 
 // Delete / Reject Log Entry (Admin Only)
-app.delete('/api/logs/:id', security.requireAdmin, (req, res) => {
+app.delete('/api/logs/:id', security.requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    db.deleteLog(Number(id));
+    await db.deleteLog(Number(id));
     res.json({ success: true, message: 'Log entry removed' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -498,7 +520,7 @@ app.delete('/api/logs/:id', security.requireAdmin, (req, res) => {
 // ================= SETTINGS & BACKUP =================
 
 // Get Settings (Public)
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', async (req, res) => {
   try {
     const settings = db.getAllSettings();
     // Do not leak password hashes in settings API
@@ -511,12 +533,12 @@ app.get('/api/settings', (req, res) => {
 });
 
 // Update Settings (Admin Only)
-app.post('/api/settings', security.requireAdmin, (req, res) => {
+app.post('/api/settings', security.requireAdmin, async (req, res) => {
   try {
     const { room_name, rotation_mode, default_can_litres } = req.body;
-    if (room_name !== undefined) db.setSetting('room_name', room_name.trim());
-    if (rotation_mode !== undefined) db.setSetting('rotation_mode', rotation_mode);
-    if (default_can_litres !== undefined) db.setSetting('default_can_litres', String(default_can_litres));
+    if (room_name !== undefined) await db.setSetting('room_name', room_name.trim());
+    if (rotation_mode !== undefined) await db.setSetting('rotation_mode', rotation_mode);
+    if (default_can_litres !== undefined) await db.setSetting('default_can_litres', String(default_can_litres));
 
     const settings = db.getAllSettings();
     delete settings.admin_pin_hash;
@@ -529,9 +551,9 @@ app.post('/api/settings', security.requireAdmin, (req, res) => {
 });
 
 // Export Backup (Public or Admin)
-app.get('/api/backup/export', (req, res) => {
+app.get('/api/backup/export', async (req, res) => {
   try {
-    const data = db.exportAllData();
+    const data = await db.exportAllData();
     // Strip sensitive hashes from export if desired
     data.settings = (data.settings || []).filter(s => !s.key.startsWith('admin_pin_'));
     res.setHeader('Content-Type', 'application/json');
@@ -543,9 +565,9 @@ app.get('/api/backup/export', (req, res) => {
 });
 
 // Import / Restore Backup (Admin Only)
-app.post('/api/backup/import', security.requireAdmin, (req, res) => {
+app.post('/api/backup/import', security.requireAdmin, async (req, res) => {
   try {
-    const summary = db.importAllData(req.body);
+    const summary = await db.importAllData(req.body);
     res.json({ success: true, data: summary });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -557,16 +579,25 @@ app.use((req, res) => {
   res.sendFile(path.join(frontendPath, 'index.html'));
 });
 
-// Start Server
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`=======================================================`);
-  console.log(`💧 Room Water Turn Manager Server Started!`);
-  console.log(`🌐 Live URL: ${DEPLOYED_URL}`);
-  console.log(`🏠 Local:    http://localhost:${PORT}`);
-  console.log(`🔐 Admin Protection: Enabled (Password Protected)`);
-  const ips = getLocalIpAddresses();
-  ips.forEach(ip => {
-    console.log(`📱 Mobile:   http://${ip}:${PORT}`);
+// Initialize DB and Start Server
+(async () => {
+  try {
+    await db.init();
+    security.ensureAdminCredentials(db);
+  } catch (err) {
+    console.error('[DB Startup Notice]:', err.message);
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`=======================================================`);
+    console.log(`💧 Room Water Turn Manager Server Started!`);
+    console.log(`🌐 Live URL: ${DEPLOYED_URL}`);
+    console.log(`🏠 Local:    http://localhost:${PORT}`);
+    console.log(`🔐 Admin Protection: Enabled (Password Protected)`);
+    const ips = getLocalIpAddresses();
+    ips.forEach(ip => {
+      console.log(`📱 Mobile:   http://${ip}:${PORT}`);
+    });
+    console.log(`=======================================================`);
   });
-  console.log(`=======================================================`);
-});
+})();

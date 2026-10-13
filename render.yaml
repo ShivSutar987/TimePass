@@ -10,3 +10,9 @@ services:
         value: 22
       - key: APP_URL
         value: https://timepass-0vuz.onrender.com
+      - key: ADMIN_PASSWORD
+        value: ShivSutar@22.132
+      - key: ADMIN_PIN
+        value: ShivSutar@22.132
+      - key: DATABASE_URL
+        value: postgresql://timpass_water_turn_user:3Y7skZMWSbnujoKafwIllzKxdohCksAw@dpg-db76utcs728c73dlc6c0-a.oregon-postgres.render.com/timpass_water_turn

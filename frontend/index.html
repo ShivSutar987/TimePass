@@ -366,6 +366,20 @@
         <div class="member-list-manage" id="manageMemberList">
           <!-- Rendered by JS -->
         </div>
+
+        <!-- Former / Archived Roommates Section (All past turns preserved in DB) -->
+        <div id="deletedMembersSection" style="margin-top: 18px; border-top: 1px dashed var(--border-color); padding-top: 14px; display: none;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h4 style="font-size: 0.88rem; color: #94a3b8; display: flex; align-items: center; gap: 6px; margin: 0;">
+              <span>📁 Former / Past Roommates</span>
+              <span class="badge-pending" id="deletedMembersCountBadge" style="font-size: 0.7rem; padding: 1px 6px;">0</span>
+            </h4>
+            <span style="font-size: 0.72rem; color: #64748b;">(Water turns preserved in DB)</span>
+          </div>
+          <div class="member-list-manage" id="manageDeletedMemberList">
+            <!-- Rendered by JS -->
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-close="modalMembers">Close</button>
